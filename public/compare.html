@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JourneyPath — Produktvergleich</title>
+    <meta name="description" content="Vergleiche deine Produkt-Kandidaten im Detail in einer übersichtlichen Tabelle. Synchronisiert mit SilverBullet.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="glass-bg-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+    </div>
+
+    <header class="app-header">
+        <div class="header-container">
+            <div class="brand">
+                <div class="logo-icon">
+                    <i data-lucide="compass"></i>
+                </div>
+                <div>
+                    <h1>JourneyPath</h1>
+                    <div class="journey-selector">
+                        <button class="btn-journey-dropdown" id="journeyDropdownBtn">
+                            <span id="currentJourneyName">bike</span>
+                            <i data-lucide="chevron-down" style="width: 12px; height: 12px;"></i>
+                        </button>
+                        <div class="journey-dropdown-menu hidden" id="journeyDropdownMenu">
+                            <div class="dropdown-header">Meine Kaufreisen</div>
+                            <div id="recentJourneysList"></div>
+                            <div class="dropdown-divider"></div>
+                            <button class="dropdown-item" id="createJourneyBtn">
+                                <i data-lucide="plus" style="width: 14px; height: 14px; margin-right: 6px;"></i>
+                                Neue Kaufreise...
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <nav class="header-nav">
+                <a href="index.html" class="nav-link">
+                    <i data-lucide="layout-dashboard"></i> Dashboard
+                </a>
+                <a href="compare.html" class="nav-link active">
+                    <i data-lucide="git-compare"></i> Vergleich
+                </a>
+                <a href="feedback.html" class="nav-link">
+                    <i data-lucide="message-square"></i> Feedback
+                </a>
+                <a href="specs.html" class="nav-link">
+                    <i data-lucide="sliders"></i> Eigenschaften
+                </a>
+            </nav>
+            
+            <div class="header-actions">
+                <div class="sync-status" id="syncStatus">
+                    <span class="status-dot green"></span>
+                    <span class="status-text">Verbunden mit SilverBullet</span>
+                </div>
+                <button id="refreshBtn" class="btn btn-icon-only" title="Daten neu laden">
+                    <i data-lucide="refresh-cw"></i>
+                </button>
+                <a href="https://notes.wohnli.com" target="_blank" class="btn btn-secondary">
+                    <i data-lucide="external-link"></i> SilverBullet öffnen
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <main class="compare-layout">
+        <div class="workspace-header">
+            <div class="title-with-count">
+                <i data-lucide="git-compare"></i>
+                <h2>Eigenschaften-Vergleich</h2>
+                <span class="badge" id="productCount">0</span>
+            </div>
+            <button id="addProductBtn" class="btn btn-primary">
+                <i data-lucide="plus"></i> Eintrag hinzufügen
+            </button>
+        </div>
+
+        <!-- Empty State -->
+        <div class="empty-state hidden" id="emptyState">
+            <div class="empty-icon"><i data-lucide="git-compare"></i></div>
+            <h3>Noch keine Einträge hinzugefügt</h3>
+            <p>Füge Produkte auf dem Dashboard oder direkt hier hinzu, um sie im Detail zu vergleichen.</p>
+            <button class="btn btn-primary" onclick="document.getElementById('addProductBtn').click()">Eintrag hinzufügen</button>
+        </div>
+
+        <!-- Scrollable Comparison Table Container -->
+        <div class="compare-container hidden" id="compareContainer">
+            <table class="compare-table" id="compareTable">
+                <!-- Dynamically generated comparison table -->
+            </table>
+        </div>
+    </main>
+
+    <!-- Add/Edit Product Modal -->
+    <div class="modal-overlay hidden" id="productModal">
+        <div class="modal card">
+            <div class="modal-header">
+                <h3 id="modalTitle">Eintrag hinzufügen</h3>
+                <button class="btn btn-icon-only close-modal" id="closeModalBtn">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <!-- Dynamic Form contents generated by compare.js based on parsed headers -->
+            <form id="productForm">
+                <input type="hidden" id="editProductIndex">
+            </form>
+        </div>
+    </div>
+
+    <!-- Create Journey Modal -->
+    <div class="modal-overlay hidden" id="journeyModal">
+        <div class="modal card" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3>Neue Kaufreise anlegen</h3>
+                <button class="btn btn-icon-only close-modal" id="closeJourneyModalBtn">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <form id="journeyForm">
+                <div class="form-group">
+                    <label for="newJourneyId">Kürzel / Name *</label>
+                    <input type="text" id="newJourneyId" class="form-control" placeholder="z.B. laptop, fernseher" required pattern="[a-z0-9.-]+">
+                    <small class="text-muted" style="margin-top: 4px; display: block;">Wird für den Dateinamen verwendet (z.B. laptop.buying-journey.md)</small>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="cancelJourneyModalBtn">Abbrechen</button>
+                    <button type="submit" class="btn btn-primary">Starten</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div class="toast hidden" id="toast">
+        <i data-lucide="info" class="toast-icon"></i>
+        <span class="toast-message" id="toastMessage">Daten gespeichert</span>
+    </div>
+
+    <script src="navigation.js"></script>
+    <script src="compare.js"></script>
+</body>
+</html>

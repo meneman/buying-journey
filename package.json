@@ -1,0 +1,13 @@
+{
+  "name": "bike-buyer-helper",
+  "version": "1.0.0",
+  "description": "A helper application for buying a bicycle, integrated with SilverBullet",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "^16.3.1"
+  }
+}
