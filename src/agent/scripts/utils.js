@@ -1,65 +1,27 @@
-const express = require('express');
-const dotenv = require('dotenv');
+const fs = require('fs');
 const path = require('path');
-const https = require('https');
 const http = require('http');
-const { URL } = require('url');
+const https = require('https');
 
 // Load environment variables
-dotenv.config();
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-const SB_API_BASE_URL = (process.env.SB_API_BASE_URL || 'https://notes.wohnli.com').replace(/\/$/, '');
-const SB_AUTH_TOKEN = process.env.SB_AUTH_TOKEN;
-
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Helper function to make HTTP requests
-function httpRequest(urlStr, options = {}) {
-  return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(urlStr);
-    const protocol = parsedUrl.protocol === 'https:' ? https : http;
-    const headers = { ...options.headers };
-    const method = options.method || 'GET';
-    
-    if (SB_AUTH_TOKEN) {
-      headers['Authorization'] = `Bearer ${SB_AUTH_TOKEN}`;
+const envPath = path.resolve(__dirname, '../../../.env');
+const env = {};
+if (fs.existsSync(envPath)) {
+  const content = fs.readFileSync(envPath, 'utf-8');
+  content.split('\n').forEach(line => {
+    const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
+    if (match) {
+      const key = match[1];
+      let value = match[2] || '';
+      if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+      if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
+      env[key] = value;
     }
-    headers['X-Sync-Mode'] = 'true';
-    
-    const reqOpts = {
-      method,
-      headers,
-      host: parsedUrl.hostname,
-      path: parsedUrl.pathname + parsedUrl.search,
-      port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-    };
-    
-    const req = protocol.request(reqOpts, (res) => {
-      const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => {
-        const buffer = Buffer.concat(chunks);
-        const body = buffer.toString('utf8');
-        resolve({
-          statusCode: res.statusCode,
-          statusMessage: res.statusMessage,
-          headers: res.headers,
-          body
-        });
-      });
-    });
-    
-    req.on('error', (err) => reject(err));
-    
-    if (options.body !== undefined) {
-      req.write(options.body);
-    }
-    req.end();
   });
 }
+
+const SB_API_BASE_URL = env.SB_API_BASE_URL || 'https://notes.wohnli.com';
+const SB_AUTH_TOKEN = env.SB_AUTH_TOKEN || '';
 
 // Resolve emoji based on journey type
 function getJourneyEmoji(journey) {
@@ -71,7 +33,7 @@ function getJourneyEmoji(journey) {
   return '📦';
 }
 
-// Markdown parser
+// Markdown parser (generic)
 function parseMarkdown(md) {
   const data = {
     status: { phase: 'Planning', budget: '', targetDate: '' },
@@ -86,14 +48,13 @@ function parseMarkdown(md) {
   
   if (!md) return data;
   
-  // Normalize newlines
   const normalizedMd = md.replace(/\r\n/g, '\n');
   
   // Split by markdown second-level headers "##"
   const sections = normalizedMd.split(/\n##\s+/);
   
   sections.forEach((section, index) => {
-    // Part 0 is the main title section (before the first ##)
+    // Part 0 is the main title section
     if (index === 0) return;
     
     const lines = section.split('\n');
@@ -120,15 +81,9 @@ function parseMarkdown(md) {
       for (let line of logLines) {
         const logMatch = line.match(/^\s*-\s+\*\*(.*?)\*\*:\s*(.*)/);
         if (logMatch) {
-          data.journey.push({
-            date: logMatch[1].trim(),
-            event: logMatch[2].trim()
-          });
+          data.journey.push({ date: logMatch[1].trim(), event: logMatch[2].trim() });
         } else if (line.trim().startsWith('-') && line.trim().length > 1) {
-          data.journey.push({
-            date: '',
-            event: line.replace(/^\s*-\s*/, '').trim()
-          });
+          data.journey.push({ date: '', event: line.replace(/^\s*-\s*/, '').trim() });
         }
       }
     } else if (headerLower.includes('general notes') || headerLower.includes('notizen')) {
@@ -275,124 +230,114 @@ function serializeToMarkdown(data, journey = 'bike') {
   return md;
 }
 
-// API Routes
-app.get('/api/data', async (req, res) => {
-  const journey = (req.query.journey || 'bike').replace(/[^a-zA-Z0-9.-]/g, '');
-  const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey.md`;
+// Helper to make local server requests
+function makeLocalRequest(path, method, body = null) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: 'localhost',
+      port: env.PORT || 1337,
+      path: path,
+      method: method,
+      headers: { 'Content-Type': 'application/json' }
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode >= 300) {
+          reject(new Error(`Local server returned ${res.statusCode}: ${data}`));
+        } else {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            resolve(data);
+          }
+        }
+      });
+    });
+    
+    req.on('error', (err) => reject(err));
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+// Helper to make SilverBullet requests
+function makeSilverBulletRequest(url, method, body = null) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http;
+    const headers = {
+      'Authorization': `Bearer ${SB_AUTH_TOKEN}`,
+      'X-Sync-Mode': 'true'
+    };
+    if (body) {
+      headers['Content-Type'] = 'text/markdown';
+    }
+    
+    const req = client.request(url, {
+      method: method,
+      headers: headers
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        resolve({
+          statusCode: res.statusCode,
+          statusMessage: res.statusMessage,
+          body: data
+        });
+      });
+    });
+    
+    req.on('error', (err) => reject(err));
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+// Get unified data
+async function getData(journey = 'bike') {
   try {
-    const response = await httpRequest(url);
+    return await makeLocalRequest(`/api/data?journey=${encodeURIComponent(journey)}`, 'GET');
+  } catch (localError) {
+    console.log('Local server not responding. Accessing SilverBullet API directly...');
+    const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey.md`;
+    const response = await makeSilverBulletRequest(url, 'GET');
     if (response.statusCode === 404) {
-      console.log(`${journey}.buying-journey.md note not found on SilverBullet. Initializing default...`);
-      const isBike = journey === 'bike';
-      const defaultData = {
-        sectionTitle: isBike ? 'Bikes Under Consideration' : `${journey.toUpperCase()}s Under Consideration`,
-        listTitle: isBike ? 'Rahmengrößen' : 'Spezifikationen',
-        headers: ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link'],
-        status: { phase: 'Planning', budget: '2500€', targetDate: '' },
-        journey: [
-          { date: new Date().toISOString().split('T')[0], event: `${journey.toUpperCase()} Buying Journey started.` }
-        ],
+      return {
+        status: { phase: 'Planning', budget: '', targetDate: '' },
+        journey: [],
         items: [],
         specs: [],
-        generalNotes: `- Research ${journey} brands and models\n- Compare options`
+        generalNotes: ''
       };
-      
-      // Save default to SB to bootstrap the note
-      const markdown = serializeToMarkdown(defaultData, journey);
-      await httpRequest(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'text/markdown' },
-        body: markdown
-      });
-      
-      return res.json(defaultData);
     }
-    
     if (response.statusCode !== 200) {
-      return res.status(response.statusCode).json({ error: `SilverBullet error: ${response.statusMessage}` });
+      throw new Error(`SilverBullet API error ${response.statusCode}: ${response.statusMessage}`);
     }
-    
-    const parsedData = parseMarkdown(response.body);
-    res.json(parsedData);
-  } catch (error) {
-    console.error('API GET Error:', error);
-    res.status(500).json({ error: error.message });
+    return parseMarkdown(response.body);
   }
-});
+}
 
-app.post('/api/data', async (req, res) => {
-  const journey = (req.query.journey || 'bike').replace(/[^a-zA-Z0-9.-]/g, '');
-  const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey.md`;
+// Save unified data
+async function saveData(data, journey = 'bike') {
   try {
-    const data = req.body;
+    await makeLocalRequest(`/api/data?journey=${encodeURIComponent(journey)}`, 'POST', data);
+    console.log('Saved data to local server.');
+  } catch (localError) {
+    console.log('Local server not responding. Writing to SilverBullet API directly...');
+    const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey.md`;
     const markdown = serializeToMarkdown(data, journey);
-    
-    const response = await httpRequest(url, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'text/markdown' },
-      body: markdown
-    });
-    
+    const response = await makeSilverBulletRequest(url, 'PUT', markdown);
     if (response.statusCode >= 300) {
-      return res.status(response.statusCode).json({ error: `SilverBullet error: ${response.statusMessage}` });
+      throw new Error(`SilverBullet API error ${response.statusCode}: ${response.statusMessage}`);
     }
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('API POST Error:', error);
-    res.status(500).json({ error: error.message });
+    console.log('Saved data to SilverBullet successfully.');
   }
-});
+}
 
-app.get('/api/feedback', async (req, res) => {
-  const journey = (req.query.journey || 'bike').replace(/[^a-zA-Z0-9.-]/g, '');
-  const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey-feedback.md`;
-  try {
-    const response = await httpRequest(url);
-    if (response.statusCode === 404) {
-      const defaultContent = `# 💬 Feedback & Erfahrungsberichte\n\n- Hier persönliche Meinungen und Erfahrungsberichte eintragen...`;
-      await httpRequest(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'text/markdown' },
-        body: defaultContent
-      });
-      return res.json({ content: defaultContent });
-    }
-    
-    if (response.statusCode !== 200) {
-      return res.status(response.statusCode).json({ error: `SilverBullet error: ${response.statusMessage}` });
-    }
-    
-    res.json({ content: response.body });
-  } catch (error) {
-    console.error('API GET Feedback Error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/feedback', async (req, res) => {
-  const journey = (req.query.journey || 'bike').replace(/[^a-zA-Z0-9.-]/g, '');
-  const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey-feedback.md`;
-  try {
-    const { content } = req.body;
-    const response = await httpRequest(url, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'text/markdown' },
-      body: content
-    });
-    
-    if (response.statusCode >= 300) {
-      return res.status(response.statusCode).json({ error: `SilverBullet error: ${response.statusMessage}` });
-    }
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('API POST Feedback Error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Start Server
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+module.exports = {
+  getData,
+  saveData,
+  parseMarkdown,
+  serializeToMarkdown
+};

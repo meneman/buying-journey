@@ -2,12 +2,12 @@
 const urlParamsShared = new URLSearchParams(window.location.search);
 const journeyShared = urlParamsShared.get('journey') || 'bike';
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // 1. Manage Recent Journeys in LocalStorage
     updateRecentJourneys(journeyShared);
     
     // 2. Render Journey Dropdown
-    renderJourneyDropdown();
+    await renderJourneyDropdown();
     
     // 3. Centralized link parameter update
     updateHeaderLinks();
@@ -24,17 +24,34 @@ function updateRecentJourneys(current) {
     }
 }
 
-function renderJourneyDropdown() {
+async function renderJourneyDropdown() {
     const listContainer = document.getElementById('recentJourneysList');
     if (!listContainer) return;
     
     listContainer.innerHTML = '';
     
-    let recent = JSON.parse(localStorage.getItem('recent_journeys') || '[]');
-    if (!recent.includes('bike')) recent.push('bike');
-    if (!recent.includes(journeyShared)) recent.push(journeyShared);
+    let journeys = ['bike'];
+    try {
+        const res = await fetch('/api/journeys');
+        if (res.ok) {
+            journeys = await res.json();
+        } else {
+            throw new Error(`API returned ${res.status}`);
+        }
+    } catch (e) {
+        console.error('Failed to fetch journeys from API, falling back to local list:', e);
+        let recent = JSON.parse(localStorage.getItem('recent_journeys') || '[]');
+        if (!recent.includes('bike')) recent.push('bike');
+        if (!recent.includes(journeyShared)) recent.push(journeyShared);
+        journeys = recent;
+    }
     
-    recent.forEach(j => {
+    // Ensure current journey is in the list
+    if (!journeys.includes(journeyShared)) {
+        journeys.push(journeyShared);
+    }
+    
+    journeys.forEach(j => {
         const btn = document.createElement('button');
         btn.className = `dropdown-item ${j === journeyShared ? 'active' : ''}`;
         btn.innerHTML = `
