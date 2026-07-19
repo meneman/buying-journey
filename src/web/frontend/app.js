@@ -56,6 +56,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Update navigation urls
     updateNavLinks();
+    
+    // Setup Sidebar Collapse
+    setupSidebarCollapses();
 });
 
 // Update Nav Links to preserve journey query parameter
@@ -98,10 +101,10 @@ function setupEventListeners() {
     
     generalNotesEl.addEventListener('input', () => {
         appState.generalNotes = generalNotesEl.value;
-        triggerAutoSave(true); // Longer debounce for typing notes
+        triggerAutoSave();
     });
     
-    // Journey log form
+    // Form submission for new event
     addLogForm.addEventListener('submit', (e) => {
         e.preventDefault();
         const date = newEventDateEl.value;
@@ -123,6 +126,47 @@ function setupEventListeners() {
     if (cancelModalBtn) cancelModalBtn.addEventListener('click', closeProductModal);
     
     productForm.addEventListener('submit', handleProductFormSubmit);
+}
+
+// Setup Sidebar Collapses
+function setupSidebarCollapses() {
+    const layout = document.querySelector('.app-layout');
+    const leftBtn = document.getElementById('collapseLeftBtn');
+    const rightBtn = document.getElementById('collapseRightBtn');
+    const panelLeft = document.getElementById('panelLeft');
+    const panelRight = document.getElementById('panelRight');
+    
+    if (leftBtn && panelLeft) {
+        leftBtn.addEventListener('click', () => {
+            layout.classList.toggle('left-collapsed');
+            panelLeft.classList.toggle('collapsed');
+            const icon = leftBtn.querySelector('i');
+            if (layout.classList.contains('left-collapsed')) {
+                icon.setAttribute('data-lucide', 'chevron-right');
+                leftBtn.title = "Ausklappen";
+            } else {
+                icon.setAttribute('data-lucide', 'chevron-left');
+                leftBtn.title = "Einklappen";
+            }
+            if (window.lucide) window.lucide.createIcons();
+        });
+    }
+    
+    if (rightBtn && panelRight) {
+        rightBtn.addEventListener('click', () => {
+            layout.classList.toggle('right-collapsed');
+            panelRight.classList.toggle('collapsed');
+            const icon = rightBtn.querySelector('i');
+            if (layout.classList.contains('right-collapsed')) {
+                icon.setAttribute('data-lucide', 'chevron-left');
+                rightBtn.title = "Ausklappen";
+            } else {
+                icon.setAttribute('data-lucide', 'chevron-right');
+                rightBtn.title = "Einklappen";
+            }
+            if (window.lucide) window.lucide.createIcons();
+        });
+    }
 }
 
 // Fetch Data from Server

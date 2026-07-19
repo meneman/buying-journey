@@ -75,14 +75,19 @@
         </div>
     </header>
 
-    <main class="app-layout">
+    <main class="app-layout left-collapsed right-collapsed">
         <!-- Status & Planning Panel (Sidebar Left) -->
-        <section class="panel panel-left card">
-            <div class="panel-header">
-                <i data-lucide="sliders"></i>
-                <h2>Status &amp; Budget</h2>
+        <section class="panel panel-left card collapsed" id="panelLeft">
+            <div class="panel-header" style="justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <i data-lucide="sliders"></i>
+                    <h2>Status &amp; Budget</h2>
+                </div>
+                <button class="btn btn-icon-only" id="collapseLeftBtn" title="Ausklappen" style="width: 28px; height: 28px; border: none; background: transparent;">
+                    <i data-lucide="chevron-right"></i>
+                </button>
             </div>
-            <div class="panel-body">
+            <div class="panel-body" id="panelLeftBody">
                 <div class="form-group">
                     <label for="currentPhase">Aktuelle Phase</label>
                     <select id="currentPhase" class="form-control">
@@ -150,12 +155,17 @@
         </section>
 
         <!-- Journey Log (Sidebar Right) -->
-        <section class="panel panel-right card">
-            <div class="panel-header">
-                <i data-lucide="milestone"></i>
-                <h2>Reisetagebuch</h2>
+        <section class="panel panel-right card collapsed" id="panelRight">
+            <div class="panel-header" style="justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <i data-lucide="milestone"></i>
+                    <h2>Reisetagebuch</h2>
+                </div>
+                <button class="btn btn-icon-only" id="collapseRightBtn" title="Ausklappen" style="width: 28px; height: 28px; border: none; background: transparent;">
+                    <i data-lucide="chevron-left"></i>
+                </button>
             </div>
-            <div class="panel-body journey-container">
+            <div class="panel-body journey-container" id="panelRightBody">
                 <!-- Timeline container -->
                 <div class="timeline" id="timeline">
                     <!-- Dynamic Log Entries -->
