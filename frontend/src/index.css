@@ -57,28 +57,28 @@
     --card-foreground: #1B2027;
     --popover: #FFFFFF;
     --popover-foreground: #1B2027;
-    --primary: #2E8B76;
+    --primary: #287A66;
     --primary-foreground: #FBFAF7;
     --secondary: #ECE6D8;
     --secondary-foreground: #1B2027;
     --muted: #EDE8DC;
-    --muted-foreground: #6E7686;
+    --muted-foreground: #5F6777;
     --accent: #E7E0CE;
     --accent-foreground: #1B2027;
-    --destructive: #B85C29;
+    --destructive: #A65324;
     --destructive-foreground: #FBFAF7;
     --border: #E1DACA;
     --input: #E1DACA;
-    --ring: #2E8B76;
+    --ring: #287A66;
     --radius: 0.5rem;
 
-    --celeste: #2E8B76;
+    --celeste: #287A66;
     --celeste-foreground: #F2FBF8;
-    --rust: #B85C29;
+    --rust: #A65324;
     --rust-foreground: #FBF4EE;
     --hiviz: #CFE829;
     --hiviz-foreground: #1B2027;
-    --steel: #6E7686;
+    --steel: #5F6777;
 }
 
 .dark {
