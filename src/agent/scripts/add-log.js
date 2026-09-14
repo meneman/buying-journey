@@ -28,16 +28,17 @@ if (!event) {
 async function main() {
   try {
     const data = await getData(journey);
-    
+    data.journey = data.journey || [];
+
     console.log(`Füge Tagebucheintrag zu "${journey}" hinzu: [${date}] ${event}`);
-    
+
     data.journey.push({
       date,
       event
     });
-    
-    // Sort log by date descending
-    data.journey.sort((a, b) => b.date.localeCompare(a.date));
+
+    // Sort log by date descending (dateless entries sort last, never crash)
+    data.journey.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     
     await saveData(data, journey);
     console.log(`✅ Erfolgreich im Reisetagebuch von "${journey}" gespeichert!`);

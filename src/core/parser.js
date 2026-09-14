@@ -8,6 +8,16 @@ function getJourneyEmoji(journey) {
   return '📦';
 }
 
+// Splits one markdown-table line into cells: divides on unescaped pipes only,
+// drops blank edge cells from leading/trailing pipes (tolerating rows without
+// edge pipes from hand-edited notes) and restores `\|` to literal pipes.
+function splitRow(line) {
+  const cells = line.split(/(?<!\\)\|/).map((cell) => cell.trim());
+  if (cells.length > 0 && cells[0] === '') cells.shift();
+  if (cells.length > 0 && cells[cells.length - 1] === '') cells.pop();
+  return cells.map((cell) => cell.replace(/\\\|/g, '|'));
+}
+
 // Markdown parser
 function parseMarkdown(md) {
   const data = {
@@ -92,12 +102,12 @@ function parseMarkdown(md) {
           if (line.includes('|') && line.includes(':---')) continue;
           
           if (line.includes('|') && rawHeaders.length === 0) {
-            rawHeaders = line.split('|').map(h => h.trim()).filter((h, i, arr) => i > 0 && i < arr.length - 1);
+            rawHeaders = splitRow(line);
             continue;
           }
-          
+
           if (line.includes('|')) {
-            const parts = line.split('|').map(p => p.trim()).filter((p, i, arr) => i > 0 && i < arr.length - 1);
+            const parts = splitRow(line);
             if (parts.length >= rawHeaders.length) {
               const item = {};
               const specParts = [];

@@ -25,12 +25,19 @@ if (!name) {
   process.exit(1);
 }
 
+// A `--flag` passed without a value parses as boolean true; that is never a
+// meaningful field value, so such options are treated as "not provided".
+function cliValue(value) {
+  return value === true ? undefined : value;
+}
+
 async function main() {
   try {
     const data = await getData(journey);
-    
+    data.items = data.items || [];
+
     // Check if item already exists
-    const existingIndex = data.items.findIndex(i => i.name.toLowerCase() === name.toLowerCase());
+    const existingIndex = data.items.findIndex(i => (i.name || '').toLowerCase() === name.toLowerCase());
     
     const existingItem = existingIndex >= 0 ? data.items[existingIndex] : {};
     
@@ -59,29 +66,36 @@ async function main() {
       name: name
     };
     
-    if (params.price !== undefined) itemData.price = params.price;
-    if (params.status !== undefined) itemData.status = params.status;
-    if (params.rating !== undefined) {
-      itemData.rating = starsFromRating(params.rating);
+    const price = cliValue(params.price);
+    const status = cliValue(params.status);
+    const rating = cliValue(params.rating);
+    const notes = cliValue(params.notes);
+    const link = cliValue(params.link);
+    if (price !== undefined) itemData.price = price;
+    if (status !== undefined) itemData.status = status;
+    if (rating !== undefined) {
+      itemData.rating = starsFromRating(rating);
     }
-    if (params.notes !== undefined) itemData.notes = params.notes;
-    if (params.link !== undefined) itemData.link = params.link;
+    if (notes !== undefined) itemData.notes = notes;
+    if (link !== undefined) itemData.link = link;
     
     // Any extra keys are treated as specifications
     const standardKeys = ['name', 'price', 'rating', 'status', 'notes', 'link', 'journey', 'specs'];
     
     Object.keys(params).forEach(key => {
       if (standardKeys.includes(key)) return;
-      
+
       const val = params[key];
+      if (val === true) return;
       const keyLower = key.toLowerCase();
       const displayKey = key.charAt(0).toUpperCase() + key.slice(1);
       existingSpecs[keyLower] = { originalKey: displayKey, value: val };
     });
     
     // Handle explicit --specs parameter if provided (overwrites specs list)
-    if (params.specs !== undefined) {
-      itemData.specs = params.specs.replace(/\r?\n/g, ' <br> ');
+    const specs = cliValue(params.specs);
+    if (specs !== undefined) {
+      itemData.specs = specs.replace(/\r?\n/g, ' <br> ');
     } else {
       // Reassemble the specs list
       const specLines = [];

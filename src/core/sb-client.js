@@ -2,12 +2,16 @@ const https = require('https');
 const http = require('http');
 const { URL } = require('url');
 
+// Default timeout (ms) so a hung SilverBullet server cannot hang our callers forever.
+const DEFAULT_TIMEOUT_MS = 15000;
+
 function makeRequest(urlStr, token, options = {}) {
   return new Promise((resolve, reject) => {
     const parsedUrl = new URL(urlStr);
     const protocol = parsedUrl.protocol === 'https:' ? https : http;
     const headers = { ...options.headers };
     const method = options.method || 'GET';
+    const timeoutMs = options.timeout ?? DEFAULT_TIMEOUT_MS;
     
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
@@ -38,6 +42,9 @@ function makeRequest(urlStr, token, options = {}) {
     });
     
     req.on('error', (err) => reject(err));
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
+    });
     if (options.body !== undefined) {
       req.write(options.body);
     }

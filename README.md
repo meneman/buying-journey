@@ -42,6 +42,11 @@ Das Frontend liegt in `frontend/` (Vite + React + TypeScript + shadcn/ui), das B
    ```
    Öffne [http://localhost:3000](http://localhost:3000).
 
+5. **Backend-Tests ausführen:**
+   ```bash
+   npm test
+   ```
+
 ---
 
 ## 📄 Speicherformat in SilverBullet

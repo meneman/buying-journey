@@ -11,9 +11,21 @@ const PORT = process.env.PORT || 3000;
 const SB_API_BASE_URL = (process.env.SB_API_BASE_URL || 'https://notes.wohnli.com').replace(/\/$/, '');
 const SB_AUTH_TOKEN = process.env.SB_AUTH_TOKEN;
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
-const FRONTEND_DIST = path.join(__dirname, '../../../frontend/dist');
+const FRONTEND_DIST = process.env.FRONTEND_DIST || path.join(__dirname, '../../../frontend/dist');
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
+
+// Malformed JSON and oversized payloads must also answer JSON, not the HTML
+// error page body-parser sends by default.
+app.use((err, req, res, next) => {
+  if (err && err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Ungültiges JSON im Request-Body.' });
+  }
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Request-Body ist zu groß (Limit: 1mb).' });
+  }
+  next(err);
+});
 app.use(express.static(FRONTEND_DIST));
 
 app.get('/api/config', (req, res) => {
@@ -25,8 +37,13 @@ function httpRequest(urlStr, options = {}) {
   return makeRequest(urlStr, SB_AUTH_TOKEN, options);
 }
 
+// Sanitizes the journey query param. Never throws: repeated params arrive as an
+// array (first one wins) and anything that sanitizes to nothing falls back to 'bike'.
 function getJourney(req) {
-  return (req.query.journey || 'bike').replace(/[^a-zA-Z0-9.-]/g, '');
+  const raw = req.query ? req.query.journey : undefined;
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  const cleaned = String(first ?? 'bike').replace(/[^a-zA-Z0-9.-]/g, '');
+  return cleaned || 'bike';
 }
 
 // API Routes
@@ -102,6 +119,9 @@ app.post('/api/data', async (req, res) => {
   const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey.md`;
   try {
     const data = req.body;
+    if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).length === 0) {
+      return res.status(400).json({ error: 'Request-Body muss ein nicht-leeres JSON-Objekt sein.' });
+    }
     const markdown = serializeToMarkdown(data, journey);
     
     const response = await httpRequest(url, {
@@ -129,10 +149,14 @@ app.post('/api/import-link', async (req, res) => {
   if (!link || typeof link !== 'string') {
     return res.status(400).json({ error: 'Feld "link" ist erforderlich.' });
   }
+  let parsedLink;
   try {
-    new URL(link);
+    parsedLink = new URL(link);
   } catch {
     return res.status(400).json({ error: 'Ungültige URL.' });
+  }
+  if (parsedLink.protocol !== 'http:' && parsedLink.protocol !== 'https:') {
+    return res.status(400).json({ error: 'Nur http(s)-URLs werden unterstützt.' });
   }
   if (!N8N_WEBHOOK_URL) {
     return res.status(500).json({ error: 'N8N_WEBHOOK_URL ist nicht konfiguriert.' });
@@ -214,7 +238,10 @@ app.post('/api/feedback', async (req, res) => {
   const journey = getJourney(req);
   const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey-feedback.md`;
   try {
-    const { content } = req.body;
+    const content = req.body ? req.body.content : undefined;
+    if (typeof content !== 'string') {
+      return res.status(400).json({ error: 'Feld "content" (String) ist erforderlich.' });
+    }
     const response = await httpRequest(url, {
       method: 'PUT',
       headers: { 'Content-Type': 'text/markdown' },
@@ -237,10 +264,19 @@ app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({ error: 'Not found' });
   }
-  res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+  res.sendFile(path.join(FRONTEND_DIST, 'index.html'), (err) => {
+    if (err && !res.headersSent) {
+      res.status(404).json({ error: 'Frontend wurde noch nicht gebaut (frontend/dist fehlt).' });
+    }
+  });
 });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+// Start Server only when run directly (requiring this module has no side effects,
+// which keeps it usable from tests and other tooling).
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = { app, getJourney };
