@@ -1,31 +1,37 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const SERVER_PATH = '../src/web/backend/server.js';
-const SB_URL = 'http://127.0.0.1:1';
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
-/** (Re)loads the server module with deterministic env, without touching the network. */
+const SERVER_PATH = '../src/web/backend/server.js';
+const STORE_PATH = '../src/db/store.js';
+
+/** (Re)loads the server module with deterministic env and an isolated SQLite file. */
 function loadServer(envOverrides = {}) {
-  const key = require.resolve(SERVER_PATH);
-  delete require.cache[key];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bike-test-'));
+  for (const mod of [SERVER_PATH, STORE_PATH]) {
+    delete require.cache[require.resolve(mod)];
+  }
   delete process.env.FRONTEND_DIST;
   Object.assign(process.env, {
     PORT: '0',
-    SB_API_BASE_URL: SB_URL,
-    SB_AUTH_TOKEN: 'test-token',
+    DB_PATH: path.join(dir, 'app.db'),
     N8N_WEBHOOK_URL: '',
   }, envOverrides);
   return require(SERVER_PATH);
 }
 
 async function startApp(t, envOverrides) {
-  const { app } = loadServer(envOverrides);
+  const { app, closeDatabase } = loadServer(envOverrides);
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
   t.after(() => {
     server.closeAllConnections();
     server.close();
+    closeDatabase();
   });
   return `http://127.0.0.1:${server.address().port}`;
 }
@@ -38,11 +44,66 @@ async function postJson(base, path, body, rawBody) {
   });
 }
 
-test('GET /api/config reports the configured SilverBullet URL', async (t) => {
+test('GET /api/config reports the sqlite storage backend', async (t) => {
   const base = await startApp(t);
   const res = await fetch(`${base}/api/config`);
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { silverBulletUrl: SB_URL });
+  assert.deepEqual(await res.json(), { storage: 'sqlite' });
+});
+
+test('journeys start with bike and data round-trips through SQLite', async (t) => {
+  const base = await startApp(t);
+  const journeys = await (await fetch(`${base}/api/journeys`)).json();
+  assert.ok(journeys.includes('bike'));
+
+  const doc = {
+    status: { phase: 'Comparing', budget: '2500€', targetDate: '2026-08-31' },
+    journey: [{ date: '2026-07-16', event: 'Probefahrt' }],
+    items: [
+      {
+        name: 'Cube Kathmandu Pro',
+        price: '1499€',
+        specs: 'Rahmen: Alu <br> Gewicht: 15.8 kg',
+        rating: '⭐⭐⭐⭐',
+        status: 'Shortlisted',
+        notes: 'top',
+        link: 'https://example.com/cube',
+      },
+    ],
+    specs: [{ label: 'Größe', value: 'M' }],
+    generalNotes: '- Federgabel ist Pflicht',
+    sectionTitle: 'Bikes Under Consideration',
+    listTitle: 'Rahmengrößen',
+  };
+  const save = await postJson(base, '/api/data?journey=bike', doc);
+  assert.equal(save.status, 200);
+  assert.deepEqual(await save.json(), { success: true });
+
+  const loaded = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  assert.deepEqual(loaded, { ...doc, headers: ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link'] });
+});
+
+test('journeys are isolated with heterogeneous specs', async (t) => {
+  const base = await startApp(t);
+  await postJson(base, '/api/data?journey=laptop', {
+    status: {}, journey: [],
+    items: [{ name: 'MacBook', specs: 'CPU: M3', status: 'Thinking' }],
+    specs: [], generalNotes: '',
+  });
+  const bike = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  assert.deepEqual(bike.items, []);
+  const journeys = await (await fetch(`${base}/api/journeys`)).json();
+  assert.ok(journeys.includes('bike') && journeys.includes('laptop'));
+});
+
+test('feedback round-trips with a default', async (t) => {
+  const base = await startApp(t);
+  const initial = await (await fetch(`${base}/api/feedback?journey=bike`)).json();
+  assert.ok(initial.content.includes('Feedback'));
+  const save = await postJson(base, '/api/feedback?journey=bike', { content: 'Eigene Notizen' });
+  assert.equal(save.status, 200);
+  const loaded = await (await fetch(`${base}/api/feedback?journey=bike`)).json();
+  assert.equal(loaded.content, 'Eigene Notizen');
 });
 
 test('POST /api/data rejects non-object bodies with 400', async (t) => {

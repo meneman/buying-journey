@@ -49,8 +49,7 @@ export function Feedback() {
           <MessageSquare className="size-8 text-muted-foreground" />
           <h3 className="font-heading font-medium">Kein Feedback vorhanden</h3>
           <p className="max-w-sm text-sm text-muted-foreground">
-            Trage Erfahrungsberichte direkt in SilverBullet in der Datei „{journey}.buying-journey-feedback.md" ein —
-            sie erscheinen hier automatisch.
+            Noch keine Erfahrungsberichte für „{journey}" hinterlegt.
           </p>
         </div>
       ) : (

@@ -1,11 +1,9 @@
-import { ExternalLink, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { JourneySwitcher } from './JourneySwitcher'
 import { NavTabs } from './NavTabs'
 import { ThemeToggle } from './ThemeToggle'
 import { usePageSync } from '@/lib/page-sync-context'
-import { useJourney } from '@/lib/router'
-import { useSilverBulletUrl } from '@/lib/use-silverbullet-url'
 import { cn } from '@/lib/utils'
 
 const STATUS_COPY: Record<string, { label: string; dot: string }> = {
@@ -33,8 +31,6 @@ function RouteMark() {
 
 export function AppHeader() {
   const { status, reload } = usePageSync()
-  const journey = useJourney()
-  const silverBulletUrl = useSilverBulletUrl()
   const copy = STATUS_COPY[status]
 
   return (
@@ -60,14 +56,6 @@ export function AppHeader() {
             <RefreshCw className="size-4" />
           </Button>
           <ThemeToggle />
-          {silverBulletUrl && (
-            <Button variant="outline" size="sm" asChild>
-              <a href={`${silverBulletUrl}/${encodeURIComponent(journey)}.buying-journey`} target="_blank" rel="noreferrer">
-                <ExternalLink className="size-3.5" />
-                SilverBullet
-              </a>
-            </Button>
-          )}
         </div>
       </div>
     </header>
