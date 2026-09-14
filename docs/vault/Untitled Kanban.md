@@ -8,16 +8,7 @@ kanban-plugin: board
 
 - [ ] change icons to font awesome font
 - [ ] Neue Karte via Muse Code erstellt (2026-09-14)
-- [ ] Backend/MCP: Infos zu bestimmter Buying Journey per REST+MCP lesbar machen
-  - Scope: komplett — ein Aufruf liefert Status (Phase/Budget/Zieldatum), Items (Name/Preis/Specs/Rating/Status/Notizen/Link), Journey-Logs, Journey-Specs, GeneralNotes, Feedback zu genau einem Journey-Slug
-  - Nur Lesen — kein Schreiben über diese Schnittstelle (kein POST/PUT/DELETE im MCP-Tool; existierende POST-Endpunkte bleiben unberührt)
-  - Form: eigener MCP-Server (stdio) im Repo, der die REST-API aufruft (kein Direkt-DB-Zugriff aus dem MCP-Server, Backend muss laufen, Default-Port 3000)
-  - Bestand heute (nicht neu erfinden): `src/web/backend/server.js` hat `GET /api/journeys`, `GET /api/data?journey=X` (liefert status, journey, items, specs, generalNotes, headers, sectionTitle, listTitle), `GET /api/feedback?journey=X`; Daten via `src/db/store.js` (`listJourneys`, `getJourneyData`, `getFeedback`); kein MCP-Code im Repo (Suche nach `mcp`/`MCP` ohne Treffer)
-  - Zu klären bei Umsetzung: neuen kombinierten Lese-Endpunkt (z.B. Journey+Feedback in einem) oder MCP-Server aggregiert `GET /api/data` + `GET /api/feedback`; Umgang mit unbekanntem Slug (heute legt `getJourney()`/`ensureJourney()` stillschweigend mit Defaults an — für Read-Zugriff 404 statt Auto-Anlage prüfen); Slug-Sanitizing beibehalten
-  - Edge Cases: unbekannter/leerer Journey-Slug, leere Journey (keine Items/Logs), Backend nicht laufend, `DB_PATH`-Variante, `frontend/dist` fehlt
-  - Akzeptanz: MCP-Tool (z.B. `journey.get`) liefert für `bike` das komplette Dokument; unbekannter Slug gibt definierten Fehler (kein stilles Anlegen); `npm test` grün
 ## progress
-
 ## done
 
 - [ ] Buying-Journey-Skill (REST): neue Journey per API anlegen
@@ -60,6 +51,15 @@ kanban-plugin: board
 
 
 
+- [ ] Backend/MCP: Infos zu bestimmter Buying Journey per REST+MCP lesbar machen
+  - Scope: komplett — ein Aufruf liefert Status (Phase/Budget/Zieldatum), Items (Name/Preis/Specs/Rating/Status/Notizen/Link), Journey-Logs, Journey-Specs, GeneralNotes, Feedback zu genau einem Journey-Slug
+  - Nur Lesen — kein Schreiben über diese Schnittstelle (kein POST/PUT/DELETE im MCP-Tool; existierende POST-Endpunkte bleiben unberührt)
+  - Form: eigener MCP-Server (stdio) im Repo, der die REST-API aufruft (kein Direkt-DB-Zugriff aus dem MCP-Server, Backend muss laufen, Default-Port 3000)
+  - Bestand heute (nicht neu erfinden): `src/web/backend/server.js` hat `GET /api/journeys`, `GET /api/data?journey=X` (liefert status, journey, items, specs, generalNotes, headers, sectionTitle, listTitle), `GET /api/feedback?journey=X`; Daten via `src/db/store.js` (`listJourneys`, `getJourneyData`, `getFeedback`); kein MCP-Code im Repo (Suche nach `mcp`/`MCP` ohne Treffer)
+  - Zu klären bei Umsetzung: neuen kombinierten Lese-Endpunkt (z.B. Journey+Feedback in einem) oder MCP-Server aggregiert `GET /api/data` + `GET /api/feedback`; Umgang mit unbekanntem Slug (heute legt `getJourney()`/`ensureJourney()` stillschweigend mit Defaults an — für Read-Zugriff 404 statt Auto-Anlage prüfen); Slug-Sanitizing beibehalten
+  - Edge Cases: unbekannter/leerer Journey-Slug, leere Journey (keine Items/Logs), Backend nicht laufend, `DB_PATH`-Variante, `frontend/dist` fehlt
+  - Akzeptanz: MCP-Tool (z.B. `journey.get`) liefert für `bike` das komplette Dokument; unbekannter Slug gibt definierten Fehler (kein stilles Anlegen); `npm test` grün
+  - Erledigt 2026-09-14: neuer MCP-Server `src/mcp/server.js` (stdio, JSON-RPC 2.0, ohne Dependencies, per `npm run mcp` startbar; Basis-URL via `MCP_BASE_URL` bzw. `PORT`, Default Port 3000); einziges Tool `journey.get` liefert `{slug, status, journey, items, specs, generalNotes, headers, sectionTitle, listTitle, feedback}`. Offene Punkte entschieden: kein neuer Backend-Endpunkt (MCP aggregiert `GET /api/journeys` + `GET /api/data` + `GET /api/feedback`, Backend unberührt); unbekannter Slug → definierter `isError`-Fehler, leerer Slug → `-32602`, Existenzprüfung via `/api/journeys` vor jedem `/api/data`-Call → kein stilles Anlegen (Frontend-Lazy-Create erhalten); Slug-Sanitizing wie Backend (unsafe Zeichen raus + lowercase, aber ohne `bike`-Fallback); Backend down → `isError` mit klarer Meldung. Tests: neuer `test/mcp.test.js` (5 Tests: tools/list, vollständiges bike-Dokument, unbekannter Slug ohne Anlage, leerer Slug, Backend down), Testskript in `package.json` erweitert; `npm test` 42/42 grün; zusätzlich live verifiziert (Doc-Keys, Fehlertext, Journeys-Liste unverändert). Kein UI-Touch, daher `MANUAL_TESTS.md` unverändert.
 ## waiting
 
 
