@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -73,6 +74,19 @@ function startMcp(t, baseUrl) {
   return { rpc, notify };
 }
 
+const PRODUCT_HTML = `<!doctype html><html><head><title>MCP Testrad Pro</title></head><body><h1>MCP Testrad Pro</h1><p>Preis: 1299€</p><p>Rahmen: Aluminium, Gewicht: 14.2 kg</p></body></html>`;
+
+/** Startet einen statischen HTTP-Server mit einer Produktseite für Crawl-Tests. */
+async function startStaticServer(t) {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(PRODUCT_HTML);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  return `http://127.0.0.1:${server.address().port}/produkt`;
+}
+
 async function handshake(client) {
   const init = await client.rpc('initialize', {});
   assert.equal(init.result.serverInfo.name, 'bike-buying-journey');
@@ -87,6 +101,210 @@ test('tools/list bietet journey.get an', async (t) => {
   const tool = res.result.tools.find((x) => x.name === 'journey.get');
   assert.ok(tool, 'journey.get fehlt in tools/list');
   assert.deepEqual(tool.inputSchema.required, ['slug']);
+});
+
+test('tools/list bietet journey.add_item an', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/list', {});
+  const tool = res.result.tools.find((x) => x.name === 'journey.add_item');
+  assert.ok(tool, 'journey.add_item fehlt in tools/list');
+  assert.deepEqual(tool.inputSchema.required, ['slug', 'name']);
+});
+
+test('journey.add_item legt ein neues Produkt an', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.add_item',
+    arguments: {
+      slug: 'bike',
+      name: 'MCP Testrad',
+      price: '999€',
+      rating: 4,
+      status: 'Shortlisted',
+      specs: { weight: '15.8 kg' },
+    },
+  });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  const out = JSON.parse(res.result.content[0].text);
+  assert.equal(out.success, true);
+  assert.equal(out.created, true);
+  assert.equal(out.item.rating, '⭐⭐⭐⭐');
+  const data = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  const item = data.items.find((i) => i.name === 'MCP Testrad');
+  assert.ok(item, 'Item wurde nicht in der Journey gespeichert');
+  assert.equal(item.price, '999€');
+  assert.match(item.specs, /Weight: 15\.8 kg/);
+});
+
+test('journey.add_item aktualisiert ein vorhandenes Produkt ohne Duplikat', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  await client.rpc('tools/call', {
+    name: 'journey.add_item',
+    arguments: { slug: 'bike', name: 'Upsert-Rad', price: '1000€', specs: { weight: '16 kg' } },
+  });
+  const res = await client.rpc('tools/call', {
+    name: 'journey.add_item',
+    arguments: { slug: 'BIKE', name: 'upsert-rad', price: '1200€', specs: { frame: 'Alu' } },
+  });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  const out = JSON.parse(res.result.content[0].text);
+  assert.equal(out.created, false);
+  const data = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  const matches = data.items.filter((i) => i.name.toLowerCase() === 'upsert-rad');
+  assert.equal(matches.length, 1, 'Upsert hat ein Duplikat angelegt');
+  assert.equal(matches[0].price, '1200€');
+  assert.match(matches[0].specs, /Weight: 16 kg/);
+  assert.match(matches[0].specs, /Frame: Alu/);
+});
+
+test('journey.add_item ohne Name gibt Invalid-Params-Fehler', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.add_item',
+    arguments: { slug: 'bike', price: '100€' },
+  });
+  assert.equal(res.error.code, -32602);
+});
+
+test('journey.add_item mit ungültigem Status gibt Invalid-Params-Fehler', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.add_item',
+    arguments: { slug: 'bike', name: 'Status-Rad', status: 'Maybe' },
+  });
+  assert.equal(res.error.code, -32602);
+});
+
+test('journey.add_item in unbekannter Journey legt nichts an', async (t) => {
+  const base = await startBackend(t);
+  const before = await (await fetch(`${base}/api/journeys`)).json();
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.add_item',
+    arguments: { slug: 'gibt-es-nicht', name: 'Geisterrad' },
+  });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /Unbekannte Journey/);
+  const after = await (await fetch(`${base}/api/journeys`)).json();
+  assert.deepEqual(after, before);
+});
+
+test('tools/list bietet journey.crawl_link an', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/list', {});
+  const tool = res.result.tools.find((x) => x.name === 'journey.crawl_link');
+  assert.ok(tool, 'journey.crawl_link fehlt in tools/list');
+  assert.deepEqual(tool.inputSchema.required, ['link']);
+});
+
+test('journey.crawl_link liefert Titel und Text einer Produktseite', async (t) => {
+  const base = await startBackend(t);
+  const pageUrl = await startStaticServer(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.crawl_link',
+    arguments: { link: pageUrl },
+  });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  const out = JSON.parse(res.result.content[0].text);
+  assert.equal(out.url, pageUrl);
+  assert.equal(out.title, 'MCP Testrad Pro');
+  assert.match(out.text, /1299€/);
+  assert.match(out.text, /14\.2 kg/);
+  assert.equal(out.truncated, false);
+});
+
+test('journey.crawl_link kürzt langen Text mit truncated-Flag', async (t) => {
+  const base = await startBackend(t);
+  const pageUrl = await startStaticServer(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.crawl_link',
+    arguments: { link: pageUrl, maxChars: 10 },
+  });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  const out = JSON.parse(res.result.content[0].text);
+  assert.equal(out.truncated, true);
+  assert.ok(out.text.length <= 10, `Text wurde nicht gekürzt: ${out.text.length} Zeichen`);
+});
+
+test('journey.crawl_link ohne Link gibt Invalid-Params-Fehler', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.crawl_link',
+    arguments: { link: '   ' },
+  });
+  assert.equal(res.error.code, -32602);
+});
+
+test('journey.crawl_link mit Nicht-http-URL gibt Invalid-Params-Fehler', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.crawl_link',
+    arguments: { link: 'ftp://example.com/produkt' },
+  });
+  assert.equal(res.error.code, -32602);
+});
+
+test('journey.crawl_link auf unerreichbaren Host gibt definierten Tool-Fehler', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.crawl_link',
+    arguments: { link: 'http://127.0.0.1:1/produkt' },
+  });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /konnte nicht geladen werden/);
+});
+
+test('Link-Flow: crawl_link und add_item speichern ein Element mit URL', async (t) => {
+  const base = await startBackend(t);
+  const pageUrl = await startStaticServer(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const crawl = await client.rpc('tools/call', {
+    name: 'journey.crawl_link',
+    arguments: { link: pageUrl },
+  });
+  assert.ok(!crawl.result.isError, `Crawl-Fehler: ${JSON.stringify(crawl)}`);
+  const crawled = JSON.parse(crawl.result.content[0].text);
+  const add = await client.rpc('tools/call', {
+    name: 'journey.add_item',
+    arguments: {
+      slug: 'bike',
+      name: crawled.title,
+      price: '1299€',
+      status: 'Thinking',
+      link: crawled.url,
+      specs: { Gewicht: '14.2 kg' },
+    },
+  });
+  assert.ok(!add.result.isError, `Add-Fehler: ${JSON.stringify(add)}`);
+  assert.equal(JSON.parse(add.result.content[0].text).created, true);
+  const data = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  const item = data.items.find((i) => i.name === 'MCP Testrad Pro');
+  assert.ok(item, 'gecrawltes Item wurde nicht gespeichert');
+  assert.equal(item.link, pageUrl);
 });
 
 test('journey.get liefert das komplette bike-Dokument', async (t) => {
