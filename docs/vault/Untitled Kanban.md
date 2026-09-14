@@ -7,7 +7,6 @@ kanban-plugin: board
 ## todo
 
 - [ ] change icons to font awesome font
-- [ ] Neue Karte via Muse Code erstellt (2026-09-14)
 ## progress
 ## done
 
@@ -60,6 +59,8 @@ kanban-plugin: board
   - Edge Cases: unbekannter/leerer Journey-Slug, leere Journey (keine Items/Logs), Backend nicht laufend, `DB_PATH`-Variante, `frontend/dist` fehlt
   - Akzeptanz: MCP-Tool (z.B. `journey.get`) liefert für `bike` das komplette Dokument; unbekannter Slug gibt definierten Fehler (kein stilles Anlegen); `npm test` grün
   - Erledigt 2026-09-14: neuer MCP-Server `src/mcp/server.js` (stdio, JSON-RPC 2.0, ohne Dependencies, per `npm run mcp` startbar; Basis-URL via `MCP_BASE_URL` bzw. `PORT`, Default Port 3000); einziges Tool `journey.get` liefert `{slug, status, journey, items, specs, generalNotes, headers, sectionTitle, listTitle, feedback}`. Offene Punkte entschieden: kein neuer Backend-Endpunkt (MCP aggregiert `GET /api/journeys` + `GET /api/data` + `GET /api/feedback`, Backend unberührt); unbekannter Slug → definierter `isError`-Fehler, leerer Slug → `-32602`, Existenzprüfung via `/api/journeys` vor jedem `/api/data`-Call → kein stilles Anlegen (Frontend-Lazy-Create erhalten); Slug-Sanitizing wie Backend (unsafe Zeichen raus + lowercase, aber ohne `bike`-Fallback); Backend down → `isError` mit klarer Meldung. Tests: neuer `test/mcp.test.js` (5 Tests: tools/list, vollständiges bike-Dokument, unbekannter Slug ohne Anlage, leerer Slug, Backend down), Testskript in `package.json` erweitert; `npm test` 42/42 grün; zusätzlich live verifiziert (Doc-Keys, Fehlertext, Journeys-Liste unverändert). Kein UI-Touch, daher `MANUAL_TESTS.md` unverändert.
+- [ ] Neue Karte via Muse Code erstellt (2026-09-14)
+  - Erledigt 2026-09-14: Testkarte ohne Arbeitsauftrag — kein Spec, keine Code-Referenzen, daher nichts zu implementieren; kein Code geändert, keine neuen Tests nötig (kein Verhalten). `npm test` 42/42 grün (unverändert). Kein UI-Touch, daher `MANUAL_TESTS.md` unverändert.
 ## waiting
 
 
