@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Plus, ShieldQuestion, Send, Trash2 } from 'lucide-react'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faPlus, faShieldHalved, faPaperPlane, faTrashCan } from '@fortawesome/free-solid-svg-icons'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -109,7 +110,7 @@ export function Dashboard() {
               <Badge variant="secondary">{data.items.length}</Badge>
             </div>
             <Button size="sm" onClick={() => setDialog({ open: true, index: null })}>
-              <Plus className="size-4" />
+              <FontAwesomeIcon icon={faPlus} className="size-4" />
               Eintrag hinzufügen
             </Button>
           </div>
@@ -118,7 +119,7 @@ export function Dashboard() {
 
           {data.items.length === 0 ? (
             <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border py-16 text-center">
-              <ShieldQuestion className="size-8 text-muted-foreground" />
+              <FontAwesomeIcon icon={faShieldHalved} className="size-8 text-muted-foreground" />
               <h3 className="font-heading font-medium">Noch keine Einträge hinzugefügt</h3>
               <p className="max-w-xs text-sm text-muted-foreground">
                 Füge dein erstes Produkt hinzu, um technische Daten, Preise und Bewertungen zu vergleichen.
@@ -157,7 +158,7 @@ export function Dashboard() {
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
                             <button className="text-muted-foreground hover:text-rust" title="Eintrag löschen">
-                              <Trash2 className="size-3" />
+                              <FontAwesomeIcon icon={faTrashCan} className="size-3" />
                             </button>
                           </AlertDialogTrigger>
                           <AlertDialogContent>
@@ -193,7 +194,7 @@ export function Dashboard() {
               <div className="flex gap-2">
                 <Input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} required />
                 <Button type="submit" variant="outline" size="icon" className="shrink-0">
-                  <Send className="size-4" />
+                  <FontAwesomeIcon icon={faPaperPlane} className="size-4" />
                 </Button>
               </div>
             </form>

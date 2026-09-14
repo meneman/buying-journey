@@ -1,13 +1,14 @@
-import { LayoutDashboard, GitCompare, MessageSquare, SlidersHorizontal } from 'lucide-react'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faTableColumns, faCodeCompare, faMessage, faSliders } from '@fortawesome/free-solid-svg-icons'
 import { Link } from '@/components/Link'
 import { useJourneyHref, useRouter } from '@/lib/router'
 import { cn } from '@/lib/utils'
 
 const TABS = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/vergleich', label: 'Vergleich', icon: GitCompare },
-  { to: '/feedback', label: 'Feedback', icon: MessageSquare },
-  { to: '/eigenschaften', label: 'Eigenschaften', icon: SlidersHorizontal },
+  { to: '/', label: 'Dashboard', icon: faTableColumns },
+  { to: '/vergleich', label: 'Vergleich', icon: faCodeCompare },
+  { to: '/feedback', label: 'Feedback', icon: faMessage },
+  { to: '/eigenschaften', label: 'Eigenschaften', icon: faSliders },
 ]
 
 export function NavTabs() {
@@ -28,7 +29,7 @@ export function NavTabs() {
               active ? 'border-celeste text-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            <Icon className="size-3.5" />
+            <FontAwesomeIcon icon={Icon} className="size-3.5" />
             {tab.label}
           </Link>
         )

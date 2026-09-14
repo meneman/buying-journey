@@ -6,7 +6,6 @@ kanban-plugin: board
 
 ## todo
 
-- [ ] change icons to font awesome font
 ## progress
 ## done
 
@@ -61,6 +60,8 @@ kanban-plugin: board
   - Erledigt 2026-09-14: neuer MCP-Server `src/mcp/server.js` (stdio, JSON-RPC 2.0, ohne Dependencies, per `npm run mcp` startbar; Basis-URL via `MCP_BASE_URL` bzw. `PORT`, Default Port 3000); einziges Tool `journey.get` liefert `{slug, status, journey, items, specs, generalNotes, headers, sectionTitle, listTitle, feedback}`. Offene Punkte entschieden: kein neuer Backend-Endpunkt (MCP aggregiert `GET /api/journeys` + `GET /api/data` + `GET /api/feedback`, Backend unberührt); unbekannter Slug → definierter `isError`-Fehler, leerer Slug → `-32602`, Existenzprüfung via `/api/journeys` vor jedem `/api/data`-Call → kein stilles Anlegen (Frontend-Lazy-Create erhalten); Slug-Sanitizing wie Backend (unsafe Zeichen raus + lowercase, aber ohne `bike`-Fallback); Backend down → `isError` mit klarer Meldung. Tests: neuer `test/mcp.test.js` (5 Tests: tools/list, vollständiges bike-Dokument, unbekannter Slug ohne Anlage, leerer Slug, Backend down), Testskript in `package.json` erweitert; `npm test` 42/42 grün; zusätzlich live verifiziert (Doc-Keys, Fehlertext, Journeys-Liste unverändert). Kein UI-Touch, daher `MANUAL_TESTS.md` unverändert.
 - [ ] Neue Karte via Muse Code erstellt (2026-09-14)
   - Erledigt 2026-09-14: Testkarte ohne Arbeitsauftrag — kein Spec, keine Code-Referenzen, daher nichts zu implementieren; kein Code geändert, keine neuen Tests nötig (kein Verhalten). `npm test` 42/42 grün (unverändert). Kein UI-Touch, daher `MANUAL_TESTS.md` unverändert.
+- [ ] change icons to font awesome font
+  - Erledigt 2026-09-14: alle 46 Lucide-Icons in 18 Dateien auf Font Awesome Free umgestellt (`@fortawesome/react-fontawesome` + `free-solid-svg-icons`, für Stern-Outline zusätzlich `free-regular-svg-icons`); `lucide-react` deinstalliert, keine Referenzen mehr im Code. Icon-Maps (`journey-category.ts`, `spec-icons.ts`, `Compare`-Attribute) liefern jetzt `IconDefinition` und rendern via `<FontAwesomeIcon>`, dynamische `<Icon/>`-Stellen entsprechend umgebaut; Spinner (`animate-spin`) laufen über den `spin`-Prop, Größen-/Farbklassen unverändert. Offene Punkte einseitig entschieden (keine Rückfragen erlaubt): Free statt Pro (keine Lizenz vorhanden), Solid-Stil, 1:1-Mapping (u.a. Bike→faBicycle, GitCompare→faCodeCompare, LayoutDashboard→faTableColumns, Disc→faLifeRing, ShieldQuestion→faShieldHalved, OctagonX→faCircleXmark, Home→faHouse, Scale→faScaleBalanced), SVG-Komponenten statt Webfont (Größen-API bleibt stabil). Verifikation: `npm test` 42/42 grün, Frontend-Build ok, `oxlint` 0 Errors (7 Warnungen in unberührten Dateien); keine neuen Unit-Tests (reiner Icon-Swap ohne Verhaltensänderung, kein Frontend-Test-Setup). Manuelle Browser-Verifikation ausstehend (Icon-Sichtbarkeit + Baseline-Ausrichtung), siehe `docs/local/MANUAL_TESTS.md`.
 ## waiting
 
 

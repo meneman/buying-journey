@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Pencil, Plus, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faPencil, faPlus, faSliders, faTrashCan } from '@fortawesome/free-solid-svg-icons'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -65,14 +66,14 @@ export function Specs() {
           <Badge variant="secondary">{data.specs.length}</Badge>
         </div>
         <Button size="sm" onClick={() => setDialog({ open: true, index: null })}>
-          <Plus className="size-4" />
+          <FontAwesomeIcon icon={faPlus} className="size-4" />
           Eintrag hinzufügen
         </Button>
       </div>
 
       {data.specs.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border py-16 text-center">
-          <SlidersHorizontal className="size-8 text-muted-foreground" />
+          <FontAwesomeIcon icon={faSliders} className="size-8 text-muted-foreground" />
           <h3 className="font-heading font-medium">Noch keine Einträge hinterlegt</h3>
           <p className="max-w-xs text-sm text-muted-foreground">
             Hinterlege wichtige Eigenschaften für diese Kaufreise, um sie schnell parat zu haben.
@@ -89,12 +90,12 @@ export function Specs() {
               </div>
               <div className="flex shrink-0 gap-1.5">
                 <Button variant="outline" size="icon-sm" title="Bearbeiten" onClick={() => setDialog({ open: true, index })}>
-                  <Pencil className="size-3.5" />
+                  <FontAwesomeIcon icon={faPencil} className="size-3.5" />
                 </Button>
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button variant="outline" size="icon-sm" title="Löschen">
-                      <Trash2 className="size-3.5" />
+                      <FontAwesomeIcon icon={faTrashCan} className="size-3.5" />
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>

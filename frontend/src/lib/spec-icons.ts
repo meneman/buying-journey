@@ -1,41 +1,41 @@
+import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
 import {
-  Scale,
-  Layers,
-  Cog,
-  Disc,
-  CircleDot,
-  Zap,
-  BatteryFull,
-  Gauge,
-  Info,
-  type LucideIcon,
-} from 'lucide-react'
+  faScaleBalanced,
+  faLayerGroup,
+  faGear,
+  faLifeRing,
+  faCircleDot,
+  faBolt,
+  faBatteryFull,
+  faGauge,
+  faCircleInfo,
+} from '@fortawesome/free-solid-svg-icons'
 
-const ICON_BY_KEY: Record<string, LucideIcon> = {
-  gewicht: Scale,
-  weight: Scale,
-  rahmen: Layers,
-  frame: Layers,
-  antrieb: Cog,
-  schaltung: Cog,
-  groupset: Cog,
-  bremsen: Disc,
-  brakes: Disc,
-  laufräder: CircleDot,
-  laufraeder: CircleDot,
-  wheels: CircleDot,
-  reifen: CircleDot,
-  tires: CircleDot,
-  reichweite: Zap,
-  range: Zap,
-  batterie: BatteryFull,
-  battery: BatteryFull,
-  leistung: Gauge,
-  power: Gauge,
+const ICON_BY_KEY: Record<string, IconDefinition> = {
+  gewicht: faScaleBalanced,
+  weight: faScaleBalanced,
+  rahmen: faLayerGroup,
+  frame: faLayerGroup,
+  antrieb: faGear,
+  schaltung: faGear,
+  groupset: faGear,
+  bremsen: faLifeRing,
+  brakes: faLifeRing,
+  laufräder: faCircleDot,
+  laufraeder: faCircleDot,
+  wheels: faCircleDot,
+  reifen: faCircleDot,
+  tires: faCircleDot,
+  reichweite: faBolt,
+  range: faBolt,
+  batterie: faBatteryFull,
+  battery: faBatteryFull,
+  leistung: faGauge,
+  power: faGauge,
 }
 
-export function iconForSpecKey(key: string): LucideIcon {
-  return ICON_BY_KEY[key.toLowerCase()] ?? Info
+export function iconForSpecKey(key: string): IconDefinition {
+  return ICON_BY_KEY[key.toLowerCase()] ?? faCircleInfo
 }
 
 export interface ParsedSpecPart {

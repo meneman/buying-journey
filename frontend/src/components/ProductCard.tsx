@@ -1,4 +1,5 @@
-import { ExternalLink, Pencil, Trash2 } from 'lucide-react'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faArrowUpRightFromSquare, faPencil, faTrashCan } from '@fortawesome/free-solid-svg-icons'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -46,7 +47,7 @@ export function ProductCard({ item, onEdit, onDelete }: ProductCardProps) {
               const Icon = part.key ? iconForSpecKey(part.key) : null
               return (
                 <div key={i} className="flex items-start gap-1.5 text-xs text-foreground/80">
-                  {Icon && <Icon className="mt-0.5 size-3.5 shrink-0 text-steel" />}
+                  {Icon && <FontAwesomeIcon icon={Icon} className="mt-0.5 size-3.5 shrink-0 text-steel" />}
                   <span>
                     {part.key && <strong className="font-medium text-foreground">{part.key}: </strong>}
                     {part.value}
@@ -64,7 +65,7 @@ export function ProductCard({ item, onEdit, onDelete }: ProductCardProps) {
         {item.link ? (
           <Button variant="link" size="sm" className="px-0" asChild>
             <a href={item.link} target="_blank" rel="noreferrer">
-              <ExternalLink className="size-3.5" />
+              <FontAwesomeIcon icon={faArrowUpRightFromSquare} className="size-3.5" />
               Details
             </a>
           </Button>
@@ -73,12 +74,12 @@ export function ProductCard({ item, onEdit, onDelete }: ProductCardProps) {
         )}
         <div className="flex gap-1.5">
           <Button variant="outline" size="icon-sm" title="Bearbeiten" onClick={onEdit}>
-            <Pencil className="size-3.5" />
+            <FontAwesomeIcon icon={faPencil} className="size-3.5" />
           </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="outline" size="icon-sm" title="Löschen">
-                <Trash2 className="size-3.5" />
+                <FontAwesomeIcon icon={faTrashCan} className="size-3.5" />
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>

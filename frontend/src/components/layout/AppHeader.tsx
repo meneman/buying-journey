@@ -1,4 +1,5 @@
-import { RefreshCw } from 'lucide-react'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faArrowsRotate } from '@fortawesome/free-solid-svg-icons'
 import { Button } from '@/components/ui/button'
 import { JourneySwitcher } from './JourneySwitcher'
 import { NavTabs } from './NavTabs'
@@ -53,7 +54,7 @@ export function AppHeader() {
             {copy.label}
           </div>
           <Button variant="ghost" size="icon-sm" title="Daten neu laden" onClick={reload}>
-            <RefreshCw className="size-4" />
+            <FontAwesomeIcon icon={faArrowsRotate} className="size-4" />
           </Button>
           <ThemeToggle />
         </div>

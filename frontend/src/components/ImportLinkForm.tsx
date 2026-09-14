@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Link2, Loader2 } from 'lucide-react'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faLink, faCircleNotch } from '@fortawesome/free-solid-svg-icons'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,7 +41,7 @@ export function ImportLinkForm() {
         disabled={loading}
       />
       <Button type="submit" variant="outline" className="shrink-0" disabled={loading || !link.trim()}>
-        {loading ? <Loader2 className="size-4 animate-spin" /> : <Link2 className="size-4" />}
+        {loading ? <FontAwesomeIcon icon={faCircleNotch} className="size-4" spin /> : <FontAwesomeIcon icon={faLink} className="size-4" />}
         Importieren
       </Button>
     </form>

@@ -1,5 +1,17 @@
 import { useState, type ReactNode } from 'react'
-import { Compass, Euro, ExternalLink, GitCompare, Info, Pencil, Star, StickyNote, Trash2 } from 'lucide-react'
+import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import {
+  faCompass,
+  faEuroSign,
+  faArrowUpRightFromSquare,
+  faCodeCompare,
+  faCircleInfo,
+  faPencil,
+  faStar,
+  faNoteSticky,
+  faTrashCan,
+} from '@fortawesome/free-solid-svg-icons'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,7 +36,7 @@ import { parseRating, translateStatus, type JourneyItem } from '@/lib/types'
 
 interface Attribute {
   label: string
-  icon: typeof Info
+  icon: IconDefinition
   render: (item: JourneyItem, index: number) => ReactNode
 }
 
@@ -62,12 +74,12 @@ export function Compare() {
   }
 
   const attributes: Attribute[] = [
-    { label: 'Name', icon: Compass, render: (item) => <span className="font-medium">{item.name}</span> },
-    { label: 'Preis', icon: Euro, render: (item) => <span className="font-mono text-celeste">{item.price || 'k.A.'}</span> },
-    { label: 'Rating', icon: Star, render: (item) => <StarRatingDisplay rating={parseRating(item.rating)} /> },
+    { label: 'Name', icon: faCompass, render: (item) => <span className="font-medium">{item.name}</span> },
+    { label: 'Preis', icon: faEuroSign, render: (item) => <span className="font-mono text-celeste">{item.price || 'k.A.'}</span> },
+    { label: 'Rating', icon: faStar, render: (item) => <StarRatingDisplay rating={parseRating(item.rating)} /> },
     {
       label: 'Status',
-      icon: Info,
+      icon: faCircleInfo,
       render: (item) => <Badge className={statusBadgeClass(item.status)}>{translateStatus(item.status)}</Badge>,
     },
     ...specKeys.map((key) => ({
@@ -77,7 +89,7 @@ export function Compare() {
     })),
     {
       label: 'Erfahrungen',
-      icon: StickyNote,
+      icon: faNoteSticky,
       render: (item) => (
         <p className="max-w-52 text-sm text-muted-foreground">{item.notes || 'Keine Notizen vorhanden.'}</p>
       ),
@@ -100,7 +112,7 @@ export function Compare() {
 
       {items.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border py-16 text-center">
-          <GitCompare className="size-8 text-muted-foreground" />
+          <FontAwesomeIcon icon={faCodeCompare} className="size-8 text-muted-foreground" />
           <h3 className="font-heading font-medium">Noch keine Einträge hinzugefügt</h3>
           <p className="max-w-xs text-sm text-muted-foreground">
             Füge Produkte auf dem Dashboard oder direkt hier hinzu, um sie im Detail zu vergleichen.
@@ -115,7 +127,7 @@ export function Compare() {
                 <TableRow key={attr.label}>
                   <TableCell className="sticky left-0 z-10 w-40 min-w-40 whitespace-nowrap bg-muted/60 align-top font-medium">
                     <div className="flex items-center gap-1.5 text-muted-foreground">
-                      <attr.icon className="size-3.5" />
+                      <FontAwesomeIcon icon={attr.icon} className="size-3.5" />
                       {attr.label}
                     </div>
                   </TableCell>
@@ -136,19 +148,19 @@ export function Compare() {
                       {item.link && (
                         <Button variant="link" size="sm" className="px-0" asChild>
                           <a href={item.link} target="_blank" rel="noreferrer">
-                            <ExternalLink className="size-3.5" />
+                            <FontAwesomeIcon icon={faArrowUpRightFromSquare} className="size-3.5" />
                             Details
                           </a>
                         </Button>
                       )}
                       <div className="flex gap-1.5">
                         <Button variant="outline" size="icon-sm" title="Bearbeiten" onClick={() => setDialog({ open: true, index })}>
-                          <Pencil className="size-3.5" />
+                          <FontAwesomeIcon icon={faPencil} className="size-3.5" />
                         </Button>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
                             <Button variant="outline" size="icon-sm" title="Löschen">
-                              <Trash2 className="size-3.5" />
+                              <FontAwesomeIcon icon={faTrashCan} className="size-3.5" />
                             </Button>
                           </AlertDialogTrigger>
                           <AlertDialogContent>

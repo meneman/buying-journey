@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { MessageSquare, User } from 'lucide-react'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faMessage, faUser } from '@fortawesome/free-solid-svg-icons'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { fetchFeedback } from '@/lib/api'
@@ -46,7 +47,7 @@ export function Feedback() {
 
       {units.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border py-16 text-center">
-          <MessageSquare className="size-8 text-muted-foreground" />
+          <FontAwesomeIcon icon={faMessage} className="size-8 text-muted-foreground" />
           <h3 className="font-heading font-medium">Kein Feedback vorhanden</h3>
           <p className="max-w-sm text-sm text-muted-foreground">
             Noch keine Erfahrungsberichte für „{journey}" hinterlegt.
@@ -58,7 +59,7 @@ export function Feedback() {
             <div key={index} className="rounded-xl border border-border bg-card p-4">
               <div className="mb-3 flex items-center gap-2.5 border-b border-border pb-3">
                 <div className="flex size-8 items-center justify-center rounded-full bg-muted">
-                  <User className="size-4 text-muted-foreground" />
+                  <FontAwesomeIcon icon={faUser} className="size-4 text-muted-foreground" />
                 </div>
                 <h3 className="font-heading font-medium">{unit.name}</h3>
               </div>
