@@ -14,24 +14,33 @@ Dieses Projekt hilft dir bei der Auswahl deines perfekten Fahrrads und dokumenti
 
 ## 🛠️ Installation & Start
 
+Das Frontend liegt in `frontend/` (Vite + React + TypeScript + shadcn/ui), das Backend in `src/web/backend` (Express).
+
 1. **Abhängigkeiten installieren:**
    ```bash
    npm install
+   npm install --prefix frontend
    ```
 
 2. **Umgebungsvariablen konfigurieren:**
-   Die Konfiguration befindet sich in der `.env`-Datei:
+   Die Konfiguration befindet sich in der `.env`-Datei im Projekt-Root:
    - `SB_API_BASE_URL`: Basisadresse deines SilverBullet-Servers (z.B. `https://notes.wohnli.com`).
    - `SB_AUTH_TOKEN`: Dein Authentifizierungstoken für die SilverBullet-API.
-   - `PORT`: Port, auf dem die App lokal läuft (Standard: `3000`).
+   - `PORT`: Port, auf dem das Backend lokal läuft (Standard: `3000`).
+   - `N8N_WEBHOOK_URL`: Webhook-URL deines n8n-Workflows, der einen Produkt-Link crawlt und die extrahierten Produktdaten zurückgibt (siehe unten).
 
-3. **App starten:**
+3. **Entwicklung (mit Hot-Reload):**
    ```bash
-   npm start
+   npm run dev
    ```
+   Startet Backend (Port `3000`) und Vite-Dev-Server (Port `5173`) gleichzeitig; der Dev-Server leitet `/api`-Aufrufe an das Backend weiter. Öffne [http://localhost:5173](http://localhost:5173).
 
-4. **Dashboard öffnen:**
-   Navigiere im Browser zu [http://localhost:3000](http://localhost:3000).
+4. **Produktion:**
+   ```bash
+   npm run build   # baut das Frontend nach frontend/dist
+   npm start        # startet das Backend, das frontend/dist mit ausliefert
+   ```
+   Öffne [http://localhost:3000](http://localhost:3000).
 
 ---
 
@@ -62,3 +71,32 @@ Die Daten werden in einer strukturierten Markdown-Datei namens `Fahrradkauf.md` 
 ```
 
 Du kannst diese Abschnitte direkt in SilverBullet bearbeiten. Beim nächsten Laden oder Klick auf "Neu laden" im Dashboard liest die App deine Änderungen ein!
+
+---
+
+## 🔗 Produkt-Import per Link (n8n)
+
+Im Dashboard und im Vergleich gibt es ein Eingabefeld, in das du einen Produkt-Link einfügen kannst. Das Backend schickt den Link per POST an deinen `N8N_WEBHOOK_URL`-Webhook:
+
+```json
+{ "url": "https://…", "journey": "bike" }
+```
+
+Der n8n-Workflow crawlt die Seite und muss als Antwort ein JSON-Objekt mit den extrahierten Produktdaten liefern:
+
+```json
+{
+  "name": "Cube Kathmandu Pro",
+  "price": "1.499 €",
+  "rating": 4,
+  "status": "Thinking",
+  "notes": "Kurze Zusammenfassung der Seite.",
+  "link": "https://…",
+  "specs": [
+    { "label": "Rahmen", "value": "Carbon" },
+    { "label": "Gewicht", "value": "14.5 kg" }
+  ]
+}
+```
+
+Der Prompt in `src/agent/prompts/product_extraction_prompt.md` beschreibt dieses Schema und eignet sich direkt als Extraktions-Prompt innerhalb des n8n-Workflows. Das Backend wandelt die Antwort automatisch in einen Eintrag um und fügt ihn der Liste hinzu.

@@ -1,7 +1,7 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const path = require('path');
-const { makeRequest, parseMarkdown, serializeToMarkdown } = require('../../core');
+const { makeRequest, parseMarkdown, serializeToMarkdown, starsFromRating, specsToString } = require('../../core');
 
 // Load environment variables
 dotenv.config();
@@ -10,13 +10,23 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const SB_API_BASE_URL = (process.env.SB_API_BASE_URL || 'https://notes.wohnli.com').replace(/\/$/, '');
 const SB_AUTH_TOKEN = process.env.SB_AUTH_TOKEN;
+const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
+const FRONTEND_DIST = path.join(__dirname, '../../../frontend/dist');
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../frontend')));
+app.use(express.static(FRONTEND_DIST));
+
+app.get('/api/config', (req, res) => {
+  res.json({ silverBulletUrl: SB_API_BASE_URL });
+});
 
 // Helper function to make HTTP requests (proxied to core client)
 function httpRequest(urlStr, options = {}) {
   return makeRequest(urlStr, SB_AUTH_TOKEN, options);
+}
+
+function getJourney(req) {
+  return (req.query.journey || 'bike').replace(/[^a-zA-Z0-9.-]/g, '');
 }
 
 // API Routes
@@ -44,7 +54,7 @@ app.get('/api/journeys', async (req, res) => {
 });
 
 app.get('/api/data', async (req, res) => {
-  const journey = (req.query.journey || 'bike').replace(/[^a-zA-Z0-9.-]/g, '');
+  const journey = getJourney(req);
   const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey.md`;
   try {
     const response = await httpRequest(url);
@@ -88,7 +98,7 @@ app.get('/api/data', async (req, res) => {
 });
 
 app.post('/api/data', async (req, res) => {
-  const journey = (req.query.journey || 'bike').replace(/[^a-zA-Z0-9.-]/g, '');
+  const journey = getJourney(req);
   const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey.md`;
   try {
     const data = req.body;
@@ -111,8 +121,71 @@ app.post('/api/data', async (req, res) => {
   }
 });
 
+// Sends a product URL to the n8n crawler and returns the extracted item
+app.post('/api/import-link', async (req, res) => {
+  const journey = getJourney(req);
+  const { link } = req.body || {};
+
+  if (!link || typeof link !== 'string') {
+    return res.status(400).json({ error: 'Feld "link" ist erforderlich.' });
+  }
+  try {
+    new URL(link);
+  } catch {
+    return res.status(400).json({ error: 'Ungültige URL.' });
+  }
+  if (!N8N_WEBHOOK_URL) {
+    return res.status(500).json({ error: 'N8N_WEBHOOK_URL ist nicht konfiguriert.' });
+  }
+
+  try {
+    const n8nResponse = await fetch(N8N_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: link, journey }),
+      signal: AbortSignal.timeout(60000),
+    });
+
+    const rawBody = await n8nResponse.text();
+    if (!n8nResponse.ok) {
+      return res.status(502).json({ error: `n8n-Fehler (${n8nResponse.status}): ${rawBody.slice(0, 300)}` });
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      return res.status(502).json({ error: 'n8n hat keine gültige JSON-Antwort geliefert.' });
+    }
+    // n8n webhook responses are sometimes wrapped in an array
+    const productData = Array.isArray(payload) ? payload[0] : payload;
+
+    if (!productData || !productData.name) {
+      return res.status(502).json({ error: 'n8n hat kein verwertbares Produkt zurückgegeben.' });
+    }
+
+    const item = {
+      name: productData.name,
+      price: productData.price || '',
+      specs: specsToString(productData.specs),
+      rating: starsFromRating(productData.rating),
+      status: productData.status || 'Thinking',
+      notes: productData.notes || '',
+      link: productData.link || link,
+    };
+
+    res.json({ item });
+  } catch (error) {
+    console.error('API Import-Link Error:', error);
+    if (error.name === 'TimeoutError') {
+      return res.status(504).json({ error: 'Zeitüberschreitung beim Warten auf n8n.' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/feedback', async (req, res) => {
-  const journey = (req.query.journey || 'bike').replace(/[^a-zA-Z0-9.-]/g, '');
+  const journey = getJourney(req);
   const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey-feedback.md`;
   try {
     const response = await httpRequest(url);
@@ -138,7 +211,7 @@ app.get('/api/feedback', async (req, res) => {
 });
 
 app.post('/api/feedback', async (req, res) => {
-  const journey = (req.query.journey || 'bike').replace(/[^a-zA-Z0-9.-]/g, '');
+  const journey = getJourney(req);
   const url = `${SB_API_BASE_URL}/.fs/${journey}.buying-journey-feedback.md`;
   try {
     const { content } = req.body;
@@ -157,6 +230,14 @@ app.post('/api/feedback', async (req, res) => {
     console.error('API POST Feedback Error:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// SPA fallback: let the React router handle any other GET route
+app.get('*', (req, res) => {
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
 });
 
 // Start Server

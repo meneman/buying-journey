@@ -1,0 +1,127 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/instrument-sans";
+@import "@fontsource-variable/inter";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: 'Instrument Sans Variable', ui-sans-serif, system-ui, sans-serif;
+    --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+
+    /* Brand accents — named after their real-world referents in cycling/workshop culture */
+    --color-celeste: var(--celeste);
+    --color-celeste-foreground: var(--celeste-foreground);
+    --color-rust: var(--rust);
+    --color-rust-foreground: var(--rust-foreground);
+    --color-hiviz: var(--hiviz);
+    --color-hiviz-foreground: var(--hiviz-foreground);
+    --color-steel: var(--steel);
+
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+:root {
+    --background: #F7F5EF;
+    --foreground: #1B2027;
+    --card: #FFFFFF;
+    --card-foreground: #1B2027;
+    --popover: #FFFFFF;
+    --popover-foreground: #1B2027;
+    --primary: #2E8B76;
+    --primary-foreground: #FBFAF7;
+    --secondary: #ECE6D8;
+    --secondary-foreground: #1B2027;
+    --muted: #EDE8DC;
+    --muted-foreground: #6E7686;
+    --accent: #E7E0CE;
+    --accent-foreground: #1B2027;
+    --destructive: #B85C29;
+    --destructive-foreground: #FBFAF7;
+    --border: #E1DACA;
+    --input: #E1DACA;
+    --ring: #2E8B76;
+    --radius: 0.5rem;
+
+    --celeste: #2E8B76;
+    --celeste-foreground: #F2FBF8;
+    --rust: #B85C29;
+    --rust-foreground: #FBF4EE;
+    --hiviz: #CFE829;
+    --hiviz-foreground: #1B2027;
+    --steel: #6E7686;
+}
+
+.dark {
+    --background: #14181C;
+    --foreground: #EBE8E0;
+    --card: #1B2027;
+    --card-foreground: #EBE8E0;
+    --popover: #1B2027;
+    --popover-foreground: #EBE8E0;
+    --primary: #4FB3A0;
+    --primary-foreground: #0B1512;
+    --secondary: #252B33;
+    --secondary-foreground: #EBE8E0;
+    --muted: #20262E;
+    --muted-foreground: #8A94A6;
+    --accent: #252B33;
+    --accent-foreground: #EBE8E0;
+    --destructive: #D9814F;
+    --destructive-foreground: #1B0F06;
+    --border: #2A313B;
+    --input: #2A313B;
+    --ring: #4FB3A0;
+
+    --celeste: #4FB3A0;
+    --celeste-foreground: #06120F;
+    --rust: #D9814F;
+    --rust-foreground: #1B0F06;
+    --hiviz: #D6FF3F;
+    --hiviz-foreground: #14181C;
+    --steel: #8A94A6;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading;
+    }
+}

@@ -1,4 +1,5 @@
 const { getData, saveData } = require('./utils.js');
+const { starsFromRating } = require('../../core');
 
 const args = process.argv.slice(2);
 const params = {};
@@ -61,8 +62,7 @@ async function main() {
     if (params.price !== undefined) itemData.price = params.price;
     if (params.status !== undefined) itemData.status = params.status;
     if (params.rating !== undefined) {
-      const ratingVal = parseInt(params.rating) || 0;
-      itemData.rating = '⭐'.repeat(ratingVal);
+      itemData.rating = starsFromRating(params.rating);
     }
     if (params.notes !== undefined) itemData.notes = params.notes;
     if (params.link !== undefined) itemData.link = params.link;
