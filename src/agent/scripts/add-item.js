@@ -1,5 +1,5 @@
 const { getData, saveData } = require('./utils.js');
-const { starsFromRating } = require('../../core');
+const { starsFromRating } = require('../../core/item-format.js');
 
 const args = process.argv.slice(2);
 const params = {};

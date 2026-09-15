@@ -3,7 +3,7 @@ const dotenv = require('dotenv');
 const path = require('path');
 const { openDatabase } = require('../../db/store.js');
 const { authGate, optionalAuth } = require('./auth.js');
-const { starsFromRating, specsToString } = require('../../core');
+const { starsFromRating, specsToString } = require('../../core/item-format.js');
 
 // Load environment variables
 dotenv.config();

@@ -1,7 +1,6 @@
 // Data access for the CLI agent scripts. Talks directly to the local SQLite
 // database (same store as the backend) — no running server required.
 const { openDatabase } = require('../../db/store.js');
-const { parseMarkdown, serializeToMarkdown } = require('../../core');
 
 let store = null;
 function getStore() {
@@ -23,6 +22,4 @@ async function saveData(data, journey = 'bike') {
 module.exports = {
   getData,
   saveData,
-  parseMarkdown,
-  serializeToMarkdown,
 };

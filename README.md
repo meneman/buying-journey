@@ -8,7 +8,7 @@ Dieses Projekt hilft dir bei der Auswahl deines perfekten Fahrrads und dokumenti
 - **🚲 Fahrrad-Vergleich:** Trage Modelle ein, bewerte sie mit Sternen, pflege Spezifikationen, trage Vor-/Nachteile ein und füge Links hinzu.
 - **🗺️ Reisetagebuch:** Dokumentiere chronologisch Meilensteine wie Probefahrten, Händlergespräche oder Entscheidungen.
 - **📝 Allgemeine Notizen:** Freitextfeld für allgemeine Notizen und Kriterien.
-- **💾 SQLite-Speicher:** Kein externer Sync nötig — die DB-Datei lässt sich einfach sichern (Datei kopieren).
+- **💾 SQLite-Speicher:** Alle Daten liegen lokal in der SQLite-Datei — sichern durch Datei kopieren.
 
 ---
 
@@ -45,6 +45,19 @@ Das Frontend liegt in `frontend/` (Vite + React + TypeScript + shadcn/ui), das B
    ```bash
    npm test
    ```
+
+---
+
+## 🔐 Anmeldung (Supabase Auth)
+
+Die Login-Seite (`/login`) bietet **Google**, **Apple** und **E-Mail + Passwort**. Alle drei liefern dasselbe Supabase-JWT, das das Backend per `auth.getUser()` verifiziert — serverseitig ist nichts umzustellen (auch `AUTH_REQUIRED=true` gilt unverändert für OAuth-Tokens).
+
+Einmalig im [Supabase-Dashboard](https://supabase.com/dashboard) einrichten (Details siehe `.env.example`):
+
+1. **Authentication → Providers:** Google (Client ID/Secret aus der Google Cloud Console) und/oder Apple (Services ID, Team ID, Key ID, Private Key aus dem Apple Developer Portal) aktivieren. Callback-URL dort jeweils: `https://<projekt>.supabase.co/auth/v1/callback`.
+2. **Authentication → URL Configuration:** Site URL = Produktions-Origin; unter Additional Redirect URLs `http://localhost:5173/login` (Dev) und `<Produktions-Origin>/login` eintragen — die App kehrt nach dem OAuth-Flow auf `/login` zurück.
+
+Solange ein Anbieter im Dashboard deaktiviert ist, schlägt sein Button mit einer Fehlermeldung auf der Login-Seite fehl (statt still zu laden).
 
 ---
 
