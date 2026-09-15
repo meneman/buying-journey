@@ -84,6 +84,19 @@ export function fetchJourneyData(journey: string): Promise<JourneyData> {
   return request<JourneyData>(`/api/data?journey=${encodeURIComponent(journey)}`)
 }
 
+/** SSE-Event-Name für externe Journey-Änderungen (z.B. MCP-`add_item`). */
+export const JOURNEY_UPDATED_EVENT = 'journey-updated'
+
+/**
+ * URL für den SSE-Stream der aktiven Journey (`GET /api/data/events`).
+ * `EventSource` kann keine Authorization-Header senden — das Backend akzeptiert
+ * den Supabase-Bearer [REDACTED] auch als `?token=` (siehe `extractBearerToken`).
+ */
+export function buildJourneyEventsUrl(journey: string, token?: string | null): string {
+  const query = `journey=${encodeURIComponent(journey)}${token ? `&token=${encodeURIComponent(token)}` : ''}`
+  return `/api/data/events?${query}`
+}
+
 export function saveJourneyData(journey: string, data: JourneyData): Promise<{ success: boolean }> {
   return request(`/api/data?journey=${encodeURIComponent(journey)}`, {
     method: 'POST',

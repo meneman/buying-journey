@@ -1,26 +1,34 @@
-# Manuelle Tests — Icons auf Font Awesome umstellen (2026-09-14)
+# Manuelle Tests — Backend→Frontend Live-Updates (SSE) (2026-09-15)
 
 Bitte zuerst selbst `npm run dev` starten (Backend auf Port `3000`, Vite-Dev-Server auf
 Port `5173`, öffnet `http://localhost:5173`; `/api`-Calls werden an das Backend geproxyt).
-Alle Lucide-Icons wurden gegen Font-Awesome-Free-Solid (Sterne zusätzlich Regular) getauscht,
-`lucide-react` ist deinstalliert. Diese Checklist ist von Hand im Browser durchzugehen —
-automatisiert verifiziert sind nur `npm test` (42/42 grün, Backend unberührt),
-Frontend-Build (`tsc -b` + `vite build`) und `oxlint` (0 Errors, nur vorbestehende Warnungen).
+Der SSE-Stream (`GET /api/data/events?journey=X`) meldet externe Änderungen nur per Toast —
+ein Reload passiert ausschließlich über den Toast-Button, nie still. Automatisiert verifiziert:
+`npm test` 64/64 grün (3 neue SSE-Tests), Frontend-Build (`tsc -b` + `vite build`) ok,
+`oxlint` 0 Errors (nur vorbestehende Warnungen).
 
-- [ ] `/?journey=bike` öffnen → Header zeigt Routen-Logo, Journey-Switcher mit Fahrrad-Icon,
-      Tabs mit Icons (Dashboard/Vergleich/Feedback/Eigenschaften), Reload- und Theme-Icon —
-      alle Icons sichtbar, keines fehlt oder ist verrutscht.
-- [ ] Leere Bereiche prüfen (Tagebuch/Produkte ohne Einträge) → Schild-Icon lesbar.
-- [ ] Produktkarte: Sterne (voll/leer), Bearbeiten-/Löschen-Buttons, „Details“-Link mit Icon.
-- [ ] Bewertung per Klick setzen (Produktdialog Sterne-Eingabe) → volle/leere Sterne korrekt.
-- [ ] `/vergleich?journey=bike` → Zeilen-Icons (Kompass, Euro, Stern, Info, Notiz) + Aktionen.
-- [ ] `/eigenschaften?journey=bike` und `/feedback?journey=bike` → Empty-State-Icons ok.
-- [ ] `/` ohne Param → Journey-Karten mit Kategorie-Icons (Fahrrad/Auto/Laptop/Haus/Paket)
-      plus „Öffnen“-Pfeil.
-- [ ] Journey-Switcher-Dropdown öffnen → Icons pro Journey + „Neue Kaufreise…“ mit Plus.
-- [ ] Dialog öffnen (z.B. Eintrag hinzufügen) → X-Schließen-Button oben rechts sichtbar.
-- [ ] Link-Import: URL einfügen → Lade-Spinner rotiert während des Imports.
-- [ ] Toast auslösen (z.B. Eintrag speichern) → Erfolgs-/Fehler-Icon im Toast sichtbar.
-- [ ] Select/Dropdown (falls vorhanden) → Chevron- und Haken-Icons ok.
-- [ ] Grob auf Ausrichtung achten: FA-Icons haben leicht anderen Baseline-Versatz als Lucide —
-      bei auffälligem Versatz bitte melden (dann wird per CSS nachjustiert).
+## Toast + Reload auf geöffneter Journey (MCP-Schreibzugriff)
+- [ ] `/?journey=bike` öffnen → kein Toast beim Laden, Seite zeigt aktuellen Stand.
+- [ ] Per MCP `journey.add_item` (slug `bike`, neuer Name) speichern → oben/unten erscheint
+      Toast „Neue Daten vom MCP-Server“ mit Button „Neu laden“, KEIN automatischer Reload,
+      KEIN Seiten-Reload, laufende Eingaben bleiben erhalten.
+- [ ] „Neu laden“ klicken → das neue Item erscheint in der Liste, Toast verschwindet.
+- [ ] Erneut per MCP auf `bike` schreiben, aber VOR dem Klick auf „Neu laden“ ein Textfeld
+      editieren (z.B. Notizen, Debounce 600ms) → ohne Klick geht keine Editierung verloren;
+      erst der Klick lädt neu.
+
+## Fremde Journey stört nicht / Scope
+- [ ] `/?journey=bike` offen lassen, per MCP auf eine ANDERE Journey schreiben
+      (z.B. `laptop`) → kein Toast auf der Bike-Seite, keine Veränderung.
+- [ ] Feedback auf `bike` speichern (`/feedback?journey=bike`) → kein Update-Toast
+      (Feedback ist bewusst außerhalb des Live-Scopes).
+
+## Reconnect / Tabs / Journey-Wechsel
+- [ ] Backend neu starten während die Seite offen ist → nach Neustart kommt bei der
+      nächsten MCP-Änderung wieder ein Toast (Browser reconnectet automatisch, kein
+      manueller Reload nötig).
+- [ ] Zwei Tabs mit `/?journey=bike` öffnen, per MCP schreiben → beide Tabs zeigen je
+      einen Toast; in Tab 1 „Neu laden“ klicken → Tab 1 aktuell, Tab 2 behält den Toast
+      bis dort ebenfalls geklickt wird.
+- [ ] Von `/?journey=bike` zu `/?journey=laptop` wechseln → alter Toast ist weg, Stream
+      folgt der neuen Journey (MCP-Schreib auf `bike` stört auf `laptop` nicht).

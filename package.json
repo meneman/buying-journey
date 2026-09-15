@@ -10,7 +10,7 @@
     "dev": "concurrently -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
     "build": "npm --prefix frontend run build",
     "mcp": "node src/mcp/server.js",
-    "test": "node --test test/item-format.test.js test/store.test.js test/server.test.js test/auth.test.js test/light-contrast.test.js test/mcp.test.js"
+    "test": "node --test test/item-format.test.js test/store.test.js test/server.test.js test/auth.test.js test/light-contrast.test.js test/mcp.test.js test/sse.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",

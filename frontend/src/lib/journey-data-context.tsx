@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { fetchJourneyData, saveJourneyData } from './api'
+import { JOURNEY_UPDATED_EVENT, buildJourneyEventsUrl, fetchJourneyData, saveJourneyData } from './api'
 import { usePageSync, type SyncStatus } from './page-sync-context'
+import { getAccessToken } from './supabase'
 import type { JourneyData } from './types'
 
 const EMPTY_DATA: JourneyData = {
@@ -54,6 +55,61 @@ function useJourneyDataState(journey: string): JourneyDataContextValue {
   useEffect(() => {
     load()
   }, [load])
+
+  // Live-Updates der aktiven Journey per SSE (kein Polling, kein stilles
+  // Auto-Reload): Bei `journey-updated` nur ein Toast mit Reload-Button, der
+  // das bestehende `load()` aufruft. Laufende Edits/Debounce-Saves werden nie
+  // überschrieben, solange der Nutzer nicht bestätigt. Der Browser reconnectet
+  // automatisch per `retry:` (auch nach Backend-Neustart); bei Journey-Wechsel
+  // wird der alte Stream geschlossen und der Toast verworfen.
+  useEffect(() => {
+    let source: EventSource | null = null
+    let cancelled = false
+    const toastId = `journey-update-${journey}`
+
+    getAccessToken()
+      .then((token) => {
+        if (cancelled) return
+        try {
+          source = new EventSource(buildJourneyEventsUrl(journey, token))
+        } catch {
+          return
+        }
+        const current = source
+        current.addEventListener(JOURNEY_UPDATED_EVENT, (event) => {
+          try {
+            const payload = JSON.parse((event as MessageEvent).data) as { slug?: string }
+            // Der Stream ist bereits pro Journey gefiltert — Fremd-Journeys
+            // (z.B. MCP-Schreibzugriff auf eine andere Journey) ignorieren.
+            if (payload.slug && payload.slug !== journey) return
+          } catch {
+            // Unparsbar: trotzdem Toast zeigen (lieber einmal zu viel).
+          }
+          toast.info('Neue Daten vom MCP-Server', {
+            id: toastId,
+            description: 'Die geöffnete Journey wurde extern geändert.',
+            action: {
+              label: 'Neu laden',
+              onClick: () => {
+                load()
+                toast.dismiss(toastId)
+              },
+            },
+            duration: 30000,
+          })
+        })
+        // `onerror` bewusst ohne Toast: `EventSource` reconnectet von selbst.
+      })
+      .catch(() => {
+        // Ohne Token/Stream bleibt der manuelle Reload — kein harter Fehler.
+      })
+
+    return () => {
+      cancelled = true
+      if (source) source.close()
+      toast.dismiss(toastId)
+    }
+  }, [journey, load])
 
   const persist = useCallback(
     (next: JourneyData, message?: string) => {

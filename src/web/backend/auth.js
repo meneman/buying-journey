@@ -44,13 +44,22 @@ function isAuthRequired() {
   );
 }
 
-// Extrahiert den Bearer-Token aus dem Authorization-Header. Gibt null zurück,
-// wenn keiner vorhanden ist (kein Throw — die Middleware entscheidet).
+// Extrahiert den Bearer-Token aus dem Authorization-Header. Fällt für
+// SSE-Streams (`EventSource` kann keine Header senden) auf `?token=` bzw.
+// `?access_token=` zurück. Gibt null zurück, wenn keiner vorhanden ist
+// (kein Throw — die Middleware entscheidet).
 function extractBearerToken(req) {
   const header =
     (req && req.headers && (req.headers.authorization || req.headers.Authorization)) || '';
   const match = String(header).match(/^\s*Bearer\s+(.+?)\s*$/i);
-  return match ? match[1] : null;
+  if (match) return match[1];
+  const query = (req && req.query) || {};
+  for (const key of ['token', 'access_token']) {
+    const value = query[key];
+    const first = Array.isArray(value) ? value[0] : value;
+    if (typeof first === 'string' && first.trim()) return first.trim();
+  }
+  return null;
 }
 
 // Supabase-Client für die Token-Verifizierung (lazy, damit der Server auch ohne

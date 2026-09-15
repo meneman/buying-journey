@@ -54,6 +54,28 @@ function getJourney(req) {
   return cleaned || 'bike';
 }
 
+// SSE-Live-Updates pro Journey (nur `GET /api/data`-Inhalt, kein Polling):
+// Clients subscriben `GET /api/data/events?journey=X`, der Browser
+// reconnectet automatisch per `retry:` (kein manueller Reload als Dauerlösung).
+// Scope: nur `POST /api/data` broadcastet an die Clients derselben Journey.
+// `POST /api/feedback`, `PUT /api/journey-config`, `POST /api/journeys` und
+// `POST /api/import-link` (speichert nichts selbst) bleiben bewusst draußen.
+const journeySseClients = new Map(); // slug -> Set<ServerResponse>
+
+function broadcastJourneyUpdate(slug) {
+  const clients = journeySseClients.get(slug);
+  if (!clients || clients.size === 0) return;
+  const payload = JSON.stringify({ slug, updatedAt: new Date().toISOString() });
+  const message = `event: journey-updated\ndata: ${payload}\n\n`;
+  for (const client of [...clients]) {
+    try {
+      client.write(message);
+    } catch {
+      // Tote Verbindung: wird beim nächsten `close` aufgeräumt.
+    }
+  }
+}
+
 // API Routes (User-Layer: authGate hängt req.user an; strikt nur mit AUTH_REQUIRED=true)
 app.get('/api/journeys', authGate, (req, res) => {
   try {
@@ -163,6 +185,52 @@ app.get('/api/data', authGate, (req, res) => {
   }
 });
 
+app.get('/api/data/events', authGate, (req, res) => {
+  const journey = getJourney(req);
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  // Reconnect-Backoff für den Browser (gilt auch nach Backend-Neustart).
+  res.write('retry: 5000\n');
+  res.write(`event: ready\ndata: ${JSON.stringify({ slug: journey })}\n\n`);
+
+  let clients = journeySseClients.get(journey);
+  if (!clients) {
+    clients = new Set();
+    journeySseClients.set(journey, clients);
+  }
+  clients.add(res);
+
+  // Proxys schließen idle Streams gerne — Kommentar als Heartbeat.
+  // Mehrere offene Tabs haben je einen eigenen Stream (je ein Toast).
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': heartbeat\n\n');
+    } catch {
+      // Wird beim `close` aufgeräumt.
+    }
+  }, 25000);
+  if (heartbeat.unref) heartbeat.unref();
+
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    const current = journeySseClients.get(journey);
+    if (current) {
+      current.delete(res);
+      if (current.size === 0) journeySseClients.delete(journey);
+    }
+    try {
+      res.end();
+    } catch {
+      // Bereits geschlossen.
+    }
+  };
+  req.on('close', cleanup);
+});
+
 app.post('/api/data', authGate, (req, res) => {
   const journey = getJourney(req);
   try {
@@ -171,6 +239,7 @@ app.post('/api/data', authGate, (req, res) => {
       return res.status(400).json({ error: 'Request-Body muss ein nicht-leeres JSON-Objekt sein.' });
     }
     store.saveJourneyData(journey, data);
+    broadcastJourneyUpdate(journey);
     res.json({ success: true });
   } catch (error) {
     console.error('API POST Error:', error);
@@ -294,4 +363,4 @@ function closeDatabase() {
   store.close();
 }
 
-module.exports = { app, getJourney, closeDatabase };
+module.exports = { app, getJourney, closeDatabase, broadcastJourneyUpdate, journeySseClients };
