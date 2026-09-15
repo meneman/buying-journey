@@ -1,7 +1,17 @@
-import type { JourneyData, JourneyItem } from './types'
+import type { JourneyConfig, JourneyConfigPatch, JourneyData, JourneyItem } from './types'
+import { getAccessToken } from './supabase'
+
+/** Authorization-Header der Supabase-Session (leer, wenn abgemeldet/nicht konfiguriert). */
+async function authHeaders(): Promise<Record<string, string>> {
+  const token = await getAccessToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, options)
+  const response = await fetch(url, {
+    ...options,
+    headers: { ...(await authHeaders()), ...((options?.headers as Record<string, string>) || {}) },
+  })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     throw new Error(body?.error || `Anfrage fehlgeschlagen (${response.status})`)
@@ -9,8 +19,65 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+export interface AuthUser {
+  id: string
+  email: string | null
+  appMetadata: Record<string, unknown>
+  userMetadata: Record<string, unknown>
+  aud: string | null
+}
+
+/** Aktueller Nutzer laut Backend (verifiziertes Supabase-JWT). Wirft bei 401. */
+export function fetchMe(): Promise<{ user: AuthUser }> {
+  return request<{ user: AuthUser }>('/api/me')
+}
+
 export function fetchJourneys(): Promise<string[]> {
   return request<string[]>('/api/journeys')
+}
+
+export interface CreateJourneyInput {
+  slug: string
+  name?: string
+  description?: string
+  category?: string
+  currency?: string
+  phase?: string
+  budget?: string
+  targetDate?: string
+  generalNotes?: string
+  sectionTitle?: string
+  listTitle?: string
+}
+
+export function createJourney(input: CreateJourneyInput): Promise<{ success: boolean; slug: string }> {
+  return request('/api/journeys', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+/** Alle Journey-Configs für die Startseite (slug-sortiert, ohne Items/Logs). */
+export function fetchJourneyConfigs(): Promise<JourneyConfig[]> {
+  return request<JourneyConfig[]>('/api/journey-configs')
+}
+
+/** Basis-Eigenschaften + Settings einer Journey lesen. */
+export function fetchJourneyConfig(journey: string): Promise<JourneyConfig> {
+  return request<JourneyConfig>(`/api/journey-config?journey=${encodeURIComponent(journey)}`)
+}
+
+/** Basis-Eigenschaften + Settings einer Journey partiell schreiben. */
+export function saveJourneyConfig(
+  journey: string,
+  patch: JourneyConfigPatch,
+): Promise<{ success: boolean; config: JourneyConfig }> {
+  return request(`/api/journey-config?journey=${encodeURIComponent(journey)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
 }
 
 export function fetchJourneyData(journey: string): Promise<JourneyData> {

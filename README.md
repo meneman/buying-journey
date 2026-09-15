@@ -52,10 +52,26 @@ Das Frontend liegt in `frontend/` (Vite + React + TypeScript + shadcn/ui), das B
 
 Die Daten liegen in `data/app.db` (SQLite, via `node:sqlite` — keine extra Dependency):
 
-- **Fester Kern** als Tabellen: `journeys` (Status, Budget, Notizen, Feedback), `journey_logs` (Tagebuch), `journey_specs` (Journey-weite Eigenschaften), `items` (Name, Preis, Rating, Status, Notizen, Link).
+- **Fester Kern** als Tabellen: `journeys` (Basis-Eigenschaften Name/Beschreibung/Kategorie/Währung, Anzeige-Settings `section_title`/`list_title`, Status, Budget, Notizen, Feedback), `journey_logs` (Tagebuch), `journey_specs` (Journey-weite Eigenschaften), `items` (Name, Preis, Rating, Status, Notizen, Link).
 - **Heterogene Vergleichseigenschaften** als JSON in `items.specs` (JSON1, `json_valid`-geprüft): Bike → `Gewicht, Rahmen, Schaltung`, Laptop → `CPU, RAM, SSD`, EV → `Reichweite, Batterie`. Jede Journey hat ihren eigenen Attributsatz, abfragbar z.B. mit `json_each` (siehe `store.specValues()` in `src/db/store.js`).
 
-Die REST-API (`/api/data`, `/api/journeys`, `/api/feedback`, `/api/import-link`) ist unverändert — das Frontend arbeitet ohne Anpassung weiter.
+Die REST-API (`/api/data`, `/api/journeys`, `/api/feedback`, `/api/import-link`) bleibt bestehen — dazu kommen die Config-Endpunkte für Basis-Eigenschaften + Settings: `GET /api/journey-config?journey=X` (lesen), `PUT /api/journey-config?journey=X` (partiell schreiben: `name`, `description`, `category`, `currency`, `sectionTitle`, `listTitle`) und `GET /api/journey-configs` (alle Configs für die Startseite).
+
+## 🔍 Vergleichseigenschaften hinzufügen
+
+Vergleichseigenschaften sind **schemalos**: Eine neue Eigenschaft entsteht, sobald ein neuer `Schlüssel:`-Präfix in den Specs irgendeines Eintrags verwendet wird — kein Schema-Update, keine Migration nötig. Die Vergleichs-Seite bildet automatisch aus der Vereinigung aller Schlüssel je eine Zeile (Reihenfolge: erstes Auftreten; fehlende Werte zeigen `—`).
+
+- **Produktdialog (UI):** Feld „Spezifikationen“, eine Eigenschaft pro Zeile im Format `Schlüssel: Wert`, z.B.
+  ```
+  Gewicht: 8.1 kg
+  Rahmen: Carbon
+  Akku: 750 Wh
+  ```
+- **CLI:** `node src/agent/scripts/add-item.js --journey bike --name "Modell" --akku "750 Wh"` — jedes zusätzliche `--flag` wird eine Eigenschaft (Key = Flag-Name mit Großbuchstaben am Anfang).
+- **MCP:** `journey.add_item` mit `"specs": {"akku": "750 Wh"}`.
+- **Link-Import:** n8n liefert `"specs": [{"label": "Akku", "value": "750 Wh"}]`.
+
+Regeln: Getrennt wird am **ersten** Doppelpunkt; Zeilen ohne Doppelpunkt sind Freitext und erzeugen **keine** Vergleichszeile. Schlüssel werden **case-insensitiv** zusammengeführt (`Akku` = `akku`), die Anzeige behält die zuerst verwendete Schreibweise. Bekannte Schlüssel bekommen automatisch ein Icon (`frontend/src/lib/spec-icons.ts`), alle anderen das Standard-Info-Icon. Zu unterscheiden davon sind die journey-weiten Eigenschaften auf der Eigenschaften-Seite (`journey_specs`) — sie gelten für die ganze Kaufreise, nicht pro Produkt.
 
 ## 🔗 Produkt-Import per Link (n8n)
 
@@ -83,3 +99,19 @@ Der n8n-Workflow crawlt die Seite und muss als Antwort ein JSON-Objekt mit den e
 ```
 
 Der Prompt in `src/agent/prompts/product_extraction_prompt.md` beschreibt dieses Schema und eignet sich direkt als Extraktions-Prompt innerhalb des n8n-Workflows. Das Backend wandelt die Antwort automatisch in einen Eintrag um und fügt ihn der Liste hinzu.
+
+## 🤖 MCP-Server (Buying Journey in Muse)
+
+`npm run mcp` startet den stdio-MCP-Server (`src/mcp/server.js`, ohne Dependencies) mit den Tools `journey.get` (komplettes Dokument inkl. Config lesen, legt nichts an), `journey.add_item` (Produkt anlegen/aktualisieren per Upsert) und `journey.crawl_link` (Produktseite headless laden, speichert nichts). Voraussetzung: Das Backend läuft (`npm run dev:server`, Default `http://localhost:3000`, via `MCP_BASE_URL` konfigurierbar).
+
+Einbindung in Muse Code: in `~/.config/muse/settings.json` unter `mcpServers` eintragen (wirkt ab dem nächsten Start):
+
+```json
+"bike-buying-journey": {
+  "type": "stdio",
+  "command": "node",
+  "args": ["/home/jakob/projekte/bike/src/mcp/server.js"],
+  "env": {"MCP_BASE_URL": "http://localhost:3000"},
+  "mode": "optional"
+}
+```

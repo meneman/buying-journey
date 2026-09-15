@@ -45,6 +45,24 @@ node src/agent/scripts/add-log.js \
 ```
 *(Das Datum `--date` ist optional und verwendet standardmäßig das heutige Datum.)*
 
+### 2b. Neue Journey per REST anlegen (statt Direkt-DB)
+
+Voraussetzung: Das Backend läuft (`npm run dev:server` bzw. `npm start`, Default-Port `3000`, vgl. `.env` `PORT`; Datenbank via `DB_PATH`, Default `data/app.db`). Die Basis-URL ist konfigurierbar, z.B. `BASE_URL="http://localhost:3000"`.
+
+```bash
+BASE_URL="http://localhost:3000"
+# Anlegen — Slug ist Pflicht, Phase/Budget/Zieldatum/Notizen optional
+curl -s -X POST "$BASE_URL/api/journeys" -H 'Content-Type: application/json' \
+  -d '{"slug":"smartphone","phase":"Planning","budget":"800€","targetDate":"2026-12-31","generalNotes":"- Modelle vergleichen"}'
+# Prüfen — die neue Journey muss in der Liste stehen
+curl -s "$BASE_URL/api/journeys"
+```
+
+- Slug-Regel wie im Frontend (`frontend/src/lib/journey-id.ts`): Kleinbuchstaben, nur `a-z 0-9 . -`. Das Backend normalisiert genauso (`"SmartPhone"` → `"smartphone"`).
+- Antworten: `201 {success, slug}` angelegt; `409` Slug existiert bereits; `400` fehlender/leerer/ungültiger Slug (kein stilles Anlegen, kein Fallback auf `bike`).
+- Wenn das Backend nicht läuft, schlägt der `curl`-Aufruf mit einem klaren Verbindungsfehler fehl — es wird nichts geschrieben (kein stilles SQLite-Schreiben in diesem Pfad).
+- Die Direkt-SQLite-Skripte (`add-item.js`/`add-log.js`) bleiben für die Item-/Log-Pflege unverändert; dieser REST-Pfad schreibt nie direkt in die DB.
+
 ### 3. Produkt aus URL hinzufügen (Crawl & Extract)
 ```bash
 node \

@@ -2,6 +2,7 @@ const express = require('express');
 const dotenv = require('dotenv');
 const path = require('path');
 const { openDatabase } = require('../../db/store.js');
+const { authGate, optionalAuth } = require('./auth.js');
 const { starsFromRating, specsToString } = require('../../core');
 
 // Load environment variables
@@ -34,6 +35,16 @@ app.get('/api/config', (req, res) => {
   res.json({ storage: 'sqlite' });
 });
 
+// Aktueller Nutzer aus dem Supabase-JWT (Bearer-Token). 200 mit { user },
+// sonst 401 — immer optional ausgewertet, damit die Antwort stabil bleibt,
+// egal ob AUTH_REQUIRED gesetzt ist.
+app.get('/api/me', optionalAuth, (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Nicht angemeldet (Bearer-Token fehlt oder ist ungültig).' });
+  }
+  res.json({ user: req.user });
+});
+
 // Sanitizes the journey query param. Never throws: repeated params arrive as an
 // array (first one wins) and anything that sanitizes to nothing falls back to 'bike'.
 function getJourney(req) {
@@ -43,8 +54,8 @@ function getJourney(req) {
   return cleaned || 'bike';
 }
 
-// API Routes
-app.get('/api/journeys', (req, res) => {
+// API Routes (User-Layer: authGate hängt req.user an; strikt nur mit AUTH_REQUIRED=true)
+app.get('/api/journeys', authGate, (req, res) => {
   try {
     res.json(store.listJourneys());
   } catch (error) {
@@ -53,7 +64,96 @@ app.get('/api/journeys', (req, res) => {
   }
 });
 
-app.get('/api/data', (req, res) => {
+// Normalizes a candidate journey slug the same way as the frontend
+// (`frontend/src/lib/journey-id.ts`): lowercase, safe chars only.
+function normalizeJourneySlug(raw) {
+  return String(raw ?? '').trim().toLowerCase().replace(/[^a-z0-9.-]/g, '');
+}
+
+// Explicit journey creation (no lazy-create via GET /api/data): the slug is
+// required, optionals are plain strings (name, description, category,
+// currency, phase, budget, targetDate, generalNotes, sectionTitle,
+// listTitle). Answers 201 with the normalized slug, 409 when the slug
+// already exists, 400 for missing/invalid input.
+app.post('/api/journeys', authGate, (req, res) => {
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ error: 'Request-Body muss ein JSON-Objekt mit Feld "slug" sein.' });
+    }
+    if (typeof body.slug !== 'string') {
+      return res.status(400).json({ error: 'Feld "slug" (String) ist erforderlich.' });
+    }
+    const slug = normalizeJourneySlug(body.slug);
+    if (!slug) {
+      return res.status(400).json({ error: 'Feld "slug" ergibt kein gültiges Journey-Kürzel (erlaubt: a-z, 0-9, ., -).' });
+    }
+    const fields = {};
+    for (const key of ['name', 'description', 'category', 'currency', 'phase', 'budget', 'targetDate', 'generalNotes', 'sectionTitle', 'listTitle']) {
+      if (body[key] !== undefined) {
+        if (typeof body[key] !== 'string') {
+          return res.status(400).json({ error: `Feld "${key}" muss ein String sein.` });
+        }
+        fields[key] = body[key];
+      }
+    }
+    try {
+      store.createJourney(slug, fields);
+    } catch (err) {
+      if (err && err.code === 'JOURNEY_EXISTS') {
+        return res.status(409).json({ error: err.message });
+      }
+      throw err;
+    }
+    res.status(201).json({ success: true, slug });
+  } catch (error) {
+    console.error('API POST Journeys Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Basis-Eigenschaften + Settings aller Journeys für die Startseite
+// (slug-sortiert, ohne Items/Logs — keine N+1 Detail-Calls nötig).
+app.get('/api/journey-configs', authGate, (req, res) => {
+  try {
+    res.json(store.listJourneyConfigs());
+  } catch (error) {
+    console.error('API GET Journey-Configs Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Basis-Eigenschaften + Settings einer Journey lesen (lazy-create mit
+// Defaults wie GET /api/data) bzw. partiell schreiben. Erlaubte Felder:
+// name, description, category, currency, sectionTitle, listTitle — alle als
+// String, Längen begrenzt (siehe store CONFIG_LIMITS). Antworten: GET 200 mit
+// dem Config-Objekt; PUT 200 mit {success, config}; 400 bei leerem,
+// nicht-Objekt-, unbekanntem, nicht-String- oder zu langem Patch.
+app.get('/api/journey-config', authGate, (req, res) => {
+  const journey = getJourney(req);
+  try {
+    res.json(store.getJourneyConfig(journey));
+  } catch (error) {
+    console.error('API GET Journey-Config Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/journey-config', authGate, (req, res) => {
+  const journey = getJourney(req);
+  try {
+    const config = store.saveJourneyConfig(journey, req.body);
+    res.json({ success: true, config });
+  } catch (error) {
+    if (error && (error.code === 'CONFIG_INVALID' || error.code === 'CONFIG_UNKNOWN_FIELD')) {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('API PUT Journey-Config Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/data', authGate, (req, res) => {
   const journey = getJourney(req);
   try {
     res.json(store.getJourneyData(journey));
@@ -63,7 +163,7 @@ app.get('/api/data', (req, res) => {
   }
 });
 
-app.post('/api/data', (req, res) => {
+app.post('/api/data', authGate, (req, res) => {
   const journey = getJourney(req);
   try {
     const data = req.body;
@@ -79,7 +179,7 @@ app.post('/api/data', (req, res) => {
 });
 
 // Sends a product URL to the n8n crawler and returns the extracted item
-app.post('/api/import-link', async (req, res) => {
+app.post('/api/import-link', authGate, async (req, res) => {
   const journey = getJourney(req);
   const { link } = req.body || {};
 
@@ -145,7 +245,7 @@ app.post('/api/import-link', async (req, res) => {
   }
 });
 
-app.get('/api/feedback', (req, res) => {
+app.get('/api/feedback', authGate, (req, res) => {
   const journey = getJourney(req);
   try {
     res.json({ content: store.getFeedback(journey) });
@@ -155,7 +255,7 @@ app.get('/api/feedback', (req, res) => {
   }
 });
 
-app.post('/api/feedback', (req, res) => {
+app.post('/api/feedback', authGate, (req, res) => {
   const journey = getJourney(req);
   try {
     const content = req.body ? req.body.content : undefined;

@@ -5,29 +5,52 @@ import { Link } from '@/components/Link'
 import { CreateJourneyDialog } from '@/components/layout/CreateJourneyDialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { fetchJourneys } from '@/lib/api'
+import { fetchJourneyConfigs, fetchJourneys } from '@/lib/api'
 import { iconForJourney } from '@/lib/journey-category'
 import { readRecentJourneys } from '@/lib/journey-id'
+import type { JourneyConfig } from '@/lib/types'
+
+function fallbackConfigs(slugs: string[]): JourneyConfig[] {
+  return slugs.map((slug) => ({
+    slug,
+    name: slug,
+    description: '',
+    category: '',
+    currency: '',
+    sectionTitle: '',
+    listTitle: '',
+    createdAt: '',
+    updatedAt: '',
+  }))
+}
 
 /**
- * Startseite ohne `?journey=`-Param: listet alle Journeys 1:1 aus
- * `GET /api/journeys` (backend-seitig slug-sortiert, mind. `bike`).
- * Kein Backend-Umbau, keine Detail-Calls — nur Name/Icon + Öffnen-Link.
+ * Startseite ohne `?journey=`-Param: listet alle Journey-Configs 1:1 aus
+ * `GET /api/journey-configs` (backend-seitig slug-sortiert, mind. `bike`) —
+ * mit Anzeigename, Kategorie-Icon und Beschreibung je Karte. Fällt bei
+ * Backend-Fehler auf die reine Slug-Liste (`GET /api/journeys`) bzw. lokale
+ * `recent_journeys` zurück.
  */
 export function JourneysOverview() {
-  const [journeys, setJourneys] = useState<string[] | null>(null)
+  const [configs, setConfigs] = useState<JourneyConfig[] | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    fetchJourneys()
+    fetchJourneyConfigs()
       .then((list) => {
-        if (!cancelled) setJourneys(list)
+        if (!cancelled) setConfigs(list)
       })
       .catch(() => {
-        const recent = readRecentJourneys()
-        if (!recent.includes('bike')) recent.push('bike')
-        if (!cancelled) setJourneys(recent)
+        fetchJourneys()
+          .then((slugs) => {
+            if (!cancelled) setConfigs(fallbackConfigs(slugs))
+          })
+          .catch(() => {
+            const recent = readRecentJourneys()
+            if (!recent.includes('bike')) recent.push('bike')
+            if (!cancelled) setConfigs(fallbackConfigs(recent))
+          })
       })
     return () => {
       cancelled = true
@@ -44,21 +67,29 @@ export function JourneysOverview() {
         </Button>
       </div>
 
-      {journeys === null ? (
+      {configs === null ? (
         <p className="text-sm text-muted-foreground">Lädt…</p>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {journeys.map((j) => {
-            const JIcon = iconForJourney(j)
+          {configs.map((c) => {
+            const JIcon = iconForJourney(c.slug, c.category)
             return (
-              <Link key={j} to={`/?journey=${encodeURIComponent(j)}`}>
+              <Link key={c.slug} to={`/?journey=${encodeURIComponent(c.slug)}`}>
                 <Card size="sm" className="transition-colors hover:border-celeste">
                   <CardContent className="flex items-center gap-3">
-                    <span className="flex size-10 items-center justify-center rounded-full bg-muted">
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted">
                       <FontAwesomeIcon icon={JIcon} className="size-5 text-celeste" />
                     </span>
-                    <span className="flex-1 truncate font-heading font-medium">{j}</span>
-                    <span className="flex items-center gap-1 text-sm text-muted-foreground">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-heading font-medium">{c.name || c.slug}</span>
+                      {c.slug !== c.name && (
+                        <span className="block truncate font-mono text-xs text-muted-foreground">{c.slug}</span>
+                      )}
+                      {c.description && (
+                        <span className="block truncate text-sm text-muted-foreground">{c.description}</span>
+                      )}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1 text-sm text-muted-foreground">
                       Öffnen
                       <FontAwesomeIcon icon={faArrowRight} className="size-4" />
                     </span>

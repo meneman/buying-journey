@@ -74,6 +74,36 @@ test('unknown journeys start with defaults and reject bad input', async (t) => {
   assert.throws(() => store.saveFeedback('bike', 42), /string/);
 });
 
+test('journey config holds base properties and settings with defaults', async (t) => {
+  const store = memDb(t);
+  const config = store.getJourneyConfig('bike');
+  assert.equal(config.slug, 'bike');
+  assert.equal(config.name, 'bike');
+  assert.equal(config.description, '');
+  assert.equal(config.category, '');
+  assert.equal(config.currency, '€');
+  assert.equal(config.sectionTitle, 'Bikes Under Consideration');
+  assert.equal(config.listTitle, 'Rahmengrößen');
+  assert.equal(typeof config.createdAt, 'string');
+});
+
+test('saveJourneyConfig patches fields and lists configs slug-sorted', async (t) => {
+  const store = memDb(t);
+  store.createJourney('zebra', { name: 'Zebra-Zeug' });
+  const updated = store.saveJourneyConfig('bike', { name: 'Mein Bike', category: 'Fahrrad' });
+  assert.equal(updated.name, 'Mein Bike');
+  assert.equal(updated.category, 'fahrrad');
+  const configs = store.listJourneyConfigs();
+  assert.deepEqual(configs.map((c) => c.slug), ['bike', 'zebra']);
+  assert.equal(configs[0].name, 'Mein Bike');
+
+  assert.throws(() => store.saveJourneyConfig('bike', {}), /leer/);
+  assert.throws(() => store.saveJourneyConfig('bike', null), /Objekt/);
+  assert.throws(() => store.saveJourneyConfig('bike', { nope: 'x' }), /Unbekannt/);
+  assert.throws(() => store.saveJourneyConfig('bike', { name: 42 }), /String/);
+  assert.throws(() => store.saveJourneyConfig('bike', { name: 'x'.repeat(81) }), /zu lang/);
+});
+
 test('feedback round-trips with a sensible default', async (t) => {
   const store = memDb(t);
   assert.ok(store.getFeedback('bike').includes('Feedback'));

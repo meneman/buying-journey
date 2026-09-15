@@ -4,7 +4,9 @@ import { Button } from '@/components/ui/button'
 import { JourneySwitcher } from './JourneySwitcher'
 import { NavTabs } from './NavTabs'
 import { ThemeToggle } from './ThemeToggle'
+import { useAuth } from '@/lib/auth-context'
 import { usePageSync } from '@/lib/page-sync-context'
+import { useRouter } from '@/lib/router'
 import { cn } from '@/lib/utils'
 
 const STATUS_COPY: Record<string, { label: string; dot: string }> = {
@@ -32,6 +34,8 @@ function RouteMark() {
 
 export function AppHeader() {
   const { status, reload } = usePageSync()
+  const { user, configured, signOut } = useAuth()
+  const { navigate } = useRouter()
   const copy = STATUS_COPY[status]
 
   return (
@@ -57,6 +61,21 @@ export function AppHeader() {
             <FontAwesomeIcon icon={faArrowsRotate} className="size-4" />
           </Button>
           <ThemeToggle />
+          {configured &&
+            (user ? (
+              <>
+                <span className="hidden max-w-40 truncate font-mono text-[11px] text-muted-foreground lg:inline">
+                  {user.email}
+                </span>
+                <Button variant="ghost" size="sm" onClick={() => void signOut()}>
+                  Abmelden
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => navigate('/login')}>
+                Anmelden
+              </Button>
+            ))}
         </div>
       </div>
     </header>

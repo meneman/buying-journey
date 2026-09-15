@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faTableColumns, faCodeCompare, faMessage, faSliders } from '@fortawesome/free-solid-svg-icons'
+import { faTableColumns, faCodeCompare, faMessage, faSliders, faGear } from '@fortawesome/free-solid-svg-icons'
 import { Link } from '@/components/Link'
 import { useJourneyHref, useRouter } from '@/lib/router'
 import { cn } from '@/lib/utils'
@@ -9,6 +9,7 @@ const TABS = [
   { to: '/vergleich', label: 'Vergleich', icon: faCodeCompare },
   { to: '/feedback', label: 'Feedback', icon: faMessage },
   { to: '/eigenschaften', label: 'Eigenschaften', icon: faSliders },
+  { to: '/einstellungen', label: 'Einstellungen', icon: faGear },
 ]
 
 export function NavTabs() {

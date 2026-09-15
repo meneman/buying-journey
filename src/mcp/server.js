@@ -2,10 +2,11 @@
 // MCP-Server (stdio) für Buying-Journey-Lese- und Schreibzugriff.
 //
 // Ruft ausschließlich die REST-API des Backends auf (kein Direkt-DB-Zugriff):
-//   GET /api/journeys            Existenzprüfung (verhindert stilles Anlegen)
-//   GET /api/data?journey=X      Status, Logs, Items, Specs, Notizen, Titel
-//   POST /api/data?journey=X     Vollständiges Dokument zurückschreiben
-//   GET /api/feedback?journey=X  Feedback-Text
+//   GET /api/journeys                  Existenzprüfung (verhindert stilles Anlegen)
+//   GET /api/data?journey=X            Status, Logs, Items, Specs, Notizen, Titel
+//   POST /api/data?journey=X           Vollständiges Dokument zurückschreiben
+//   GET /api/feedback?journey=X        Feedback-Text
+//   GET /api/journey-config?journey=X  Basis-Eigenschaften + Settings
 //
 // Das Backend muss laufen. Basis-URL konfigurierbar:
 //   MCP_BASE_URL=http://localhost:3000  (Default; sonst PORT, Default 3000)
@@ -98,13 +99,14 @@ function specsToWireString(keyed, freeText) {
 
 async function readJourney(slug) {
   await assertKnownJourney(slug);
-  // Erst ab hier /api/data anfassen — vorher anzufragen würde die Journey
-  // via ensureJourney stillschweigend anlegen.
-  const [data, feedback] = await Promise.all([
+  // Erst ab hier /api/data und /api/journey-config anfassen — vorher
+  // anzufragen würde die Journey via ensureJourney stillschweigend anlegen.
+  const [data, feedback, config] = await Promise.all([
     getJson(`${BASE_URL}/api/data?journey=${encodeURIComponent(slug)}`),
     getJson(`${BASE_URL}/api/feedback?journey=${encodeURIComponent(slug)}`),
+    getJson(`${BASE_URL}/api/journey-config?journey=${encodeURIComponent(slug)}`),
   ]);
-  return { slug, ...data, feedback: feedback && feedback.content };
+  return { slug, ...data, feedback: feedback && feedback.content, config };
 }
 
 function invalidParams(message) {
@@ -330,7 +332,7 @@ async function assertKnownJourney(slug) {
 const TOOL_DEF = {
   name: 'journey.get',
   description:
-    'Liest das komplette Dokument einer Buying Journey (Status, Logs, Items, Specs, Notizen, Feedback). Nur Lesen, legt nichts an.',
+    'Liest das komplette Dokument einer Buying Journey (Status, Logs, Items, Specs, Notizen, Feedback, Config mit Basis-Eigenschaften und Settings). Nur Lesen, legt nichts an.',
   inputSchema: {
     type: 'object',
     properties: { slug: { type: 'string', description: 'Journey-Kürzel, z.B. "bike"' } },

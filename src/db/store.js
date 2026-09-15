@@ -29,6 +29,12 @@ function defaultJourneyRow(slug) {
   const isBike = slug === 'bike';
   return {
     slug,
+    // Basis-Eigenschaften: Anzeigename startet als Slug, Kategorie bleibt leer
+    // (Frontend leitet das Icon dann vom Slug ab), Währung mit €-Default.
+    name: slug,
+    description: '',
+    category: '',
+    currency: '€',
     section_title: isBike ? 'Bikes Under Consideration' : `${slug.toUpperCase()}s Under Consideration`,
     list_title: isBike ? 'Rahmengrößen' : 'Spezifikationen',
     phase: 'Planning',
@@ -37,6 +43,34 @@ function defaultJourneyRow(slug) {
     general_notes: `- Research ${slug} brands and models\n- Compare options`,
     feedback: '# 💬 Feedback & Erfahrungsberichte\n\n- Hier persönliche Meinungen und Erfahrungsberichte eintragen...',
   };
+}
+
+// Basis-Eigenschaften + Anzeige-Settings einer Journey (Config-Ressource).
+// Maximallängen schützen vor versehentlichen Riesen-Strings; die API meldet
+// Überschreitungen mit 400 statt still zu kürzen.
+const CONFIG_LIMITS = {
+  name: 80,
+  description: 500,
+  category: 40,
+  currency: 10,
+  sectionTitle: 120,
+  listTitle: 120,
+};
+
+// Spaltenname in `journeys` je Config-Feld (camelCase der API -> snake_case).
+const CONFIG_COLUMNS = {
+  name: 'name',
+  description: 'description',
+  category: 'category',
+  currency: 'currency',
+  sectionTitle: 'section_title',
+  listTitle: 'list_title',
+};
+
+function normalizeConfigField(key, value) {
+  const trimmed = value.trim();
+  if (key === 'category') return trimmed.toLowerCase();
+  return trimmed;
 }
 
 // --- Specs conversion: wire string ("Key: Value <br> free text") <-> JSON array ---
@@ -87,6 +121,10 @@ function openDatabase(dbPathExplicit) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS journeys (
       slug TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL DEFAULT '',
+      currency TEXT NOT NULL DEFAULT '',
       section_title TEXT NOT NULL DEFAULT 'Items Under Consideration',
       list_title TEXT NOT NULL DEFAULT 'Spezifikationen',
       phase TEXT NOT NULL DEFAULT 'Planning',
@@ -130,20 +168,175 @@ function openDatabase(dbPathExplicit) {
     CREATE INDEX IF NOT EXISTS idx_items_journey ON items (journey_slug, position);
   `);
 
+  // Migration für bestehende DB-Dateien (vor den Config-Spalten angelegt):
+  // fehlende Spalten nachrüsten und leere Basis-Felder sinnvoll füllen
+  // (name = slug, currency = €), damit alte Journeys sofort Configs zeigen.
+  ensureConfigColumns();
+  backfillConfigDefaults();
+
+  function ensureConfigColumns() {
+    const existing = new Set(
+      db.prepare(`PRAGMA table_info(journeys)`).all().map((c) => c.name)
+    );
+    for (const column of Object.values(CONFIG_COLUMNS)) {
+      if (!existing.has(column)) {
+        db.exec(`ALTER TABLE journeys ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
+      }
+    }
+  }
+
+  function backfillConfigDefaults() {
+    db.prepare(`UPDATE journeys SET name = slug WHERE name IS NULL OR name = ''`).run();
+    db.prepare(`UPDATE journeys SET currency = '€' WHERE currency IS NULL OR currency = ''`).run();
+  }
+
   ensureJourney('bike');
 
   function ensureJourney(slug) {
     const row = defaultJourneyRow(slug);
     db.prepare(
-        `INSERT INTO journeys (slug, section_title, list_title, phase, budget, target_date, general_notes, feedback)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO journeys (slug, name, description, category, currency, section_title, list_title, phase, budget, target_date, general_notes, feedback)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (slug) DO NOTHING`
       )
-      .run(row.slug, row.section_title, row.list_title, row.phase, row.budget, row.target_date, row.general_notes, row.feedback);
+      .run(
+        row.slug,
+        row.name,
+        row.description,
+        row.category,
+        row.currency,
+        row.section_title,
+        row.list_title,
+        row.phase,
+        row.budget,
+        row.target_date,
+        row.general_notes,
+        row.feedback
+      );
+    // Falls die Zeile schon vor den Config-Spalten existierte (ON CONFLICT
+    // DO NOTHING), füllt das Backfill leere Basis-Felder nach.
+    backfillConfigDefaults();
+  }
+
+  function rowToConfig(r) {
+    return {
+      slug: r.slug,
+      name: r.name || r.slug,
+      description: r.description || '',
+      category: r.category || '',
+      currency: r.currency || '',
+      sectionTitle: r.section_title,
+      listTitle: r.list_title,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
   }
 
   function listJourneys() {
     return db.prepare('SELECT slug FROM journeys ORDER BY slug').all().map((r) => r.slug);
+  }
+
+  // Alle Journey-Configs für die Startseite (slug-sortiert, ohne Items/Logs —
+  // keine N+1 Detail-Calls nötig).
+  function listJourneyConfigs() {
+    return db.prepare('SELECT * FROM journeys ORDER BY slug').all().map(rowToConfig);
+  }
+
+  // Basis-Eigenschaften + Settings einer Journey lesen (legt sie bei Bedarf
+  // wie GET /api/data mit Defaults an).
+  function getJourneyConfig(slug) {
+    ensureJourney(slug);
+    return rowToConfig(db.prepare('SELECT * FROM journeys WHERE slug = ?').get(slug));
+  }
+
+  // Partielles Config-Update: nur bekannte Felder, alle als String, Längen
+  // begrenzt (CONFIG_LIMITS). Unbekannte Felder wirft CODE 'CONFIG_UNKNOWN_FIELD',
+  // Typ-/Längenfehler 'CONFIG_INVALID' — die API mappt beides auf 400.
+  function saveJourneyConfig(slug, patch) {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      const err = new Error('Config-Patch muss ein Objekt sein.');
+      err.code = 'CONFIG_INVALID';
+      throw err;
+    }
+    const keys = Object.keys(patch);
+    if (keys.length === 0) {
+      const err = new Error('Config-Patch darf nicht leer sein.');
+      err.code = 'CONFIG_INVALID';
+      throw err;
+    }
+    ensureJourney(slug);
+    const sets = [];
+    const values = [];
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(CONFIG_COLUMNS, key)) {
+        const err = new Error(`Unbekanntes Config-Feld "${key}".`);
+        err.code = 'CONFIG_UNKNOWN_FIELD';
+        throw err;
+      }
+      const raw = patch[key];
+      if (typeof raw !== 'string') {
+        const err = new Error(`Config-Feld "${key}" muss ein String sein.`);
+        err.code = 'CONFIG_INVALID';
+        throw err;
+      }
+      const normalized = normalizeConfigField(key, raw);
+      if (normalized.length > CONFIG_LIMITS[key]) {
+        const err = new Error(
+          `Config-Feld "${key}" ist zu lang (max. ${CONFIG_LIMITS[key]} Zeichen).`
+        );
+        err.code = 'CONFIG_INVALID';
+        throw err;
+      }
+      sets.push(`${CONFIG_COLUMNS[key]} = ?`);
+      values.push(normalized);
+    }
+    db.prepare(
+      `UPDATE journeys SET ${sets.join(', ')}, updated_at = datetime('now') WHERE slug = ?`
+    ).run(...values, slug);
+    return getJourneyConfig(slug);
+  }
+
+  // Explicit creation (used by POST /api/journeys): inserts a new journey row
+  // with defaults plus the given optional fields. Unlike ensureJourney, this
+  // never silently keeps an existing row — a duplicate slug throws with code
+  // 'JOURNEY_EXISTS'. The slug is expected pre-normalized (lowercase, safe
+  // chars); validation happens at the API boundary.
+  function createJourney(slug, fields = {}) {
+    const row = defaultJourneyRow(slug);
+    if (fields.name !== undefined) row.name = fields.name;
+    if (fields.description !== undefined) row.description = fields.description;
+    if (fields.category !== undefined) row.category = fields.category.trim().toLowerCase();
+    if (fields.currency !== undefined) row.currency = fields.currency;
+    if (fields.phase !== undefined) row.phase = fields.phase;
+    if (fields.budget !== undefined) row.budget = fields.budget;
+    if (fields.targetDate !== undefined) row.target_date = fields.targetDate;
+    if (fields.generalNotes !== undefined) row.general_notes = fields.generalNotes;
+    if (fields.sectionTitle !== undefined) row.section_title = fields.sectionTitle;
+    if (fields.listTitle !== undefined) row.list_title = fields.listTitle;
+    const exists = db.prepare('SELECT 1 FROM journeys WHERE slug = ?').get(slug);
+    if (exists) {
+      const err = new Error(`Journey "${slug}" existiert bereits.`);
+      err.code = 'JOURNEY_EXISTS';
+      throw err;
+    }
+    db.prepare(
+      `INSERT INTO journeys (slug, name, description, category, currency, section_title, list_title, phase, budget, target_date, general_notes, feedback)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      row.slug,
+      row.name,
+      row.description,
+      row.category,
+      row.currency,
+      row.section_title,
+      row.list_title,
+      row.phase,
+      row.budget,
+      row.target_date,
+      row.general_notes,
+      row.feedback
+    );
+    return slug;
   }
 
   function getJourneyData(slug) {
@@ -279,6 +472,10 @@ function openDatabase(dbPathExplicit) {
   return {
     path: dbPath,
     listJourneys,
+    listJourneyConfigs,
+    getJourneyConfig,
+    saveJourneyConfig,
+    createJourney,
     getJourneyData,
     saveJourneyData,
     getFeedback,

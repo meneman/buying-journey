@@ -24,6 +24,32 @@ export interface JourneySpec {
   value: string
 }
 
+/** Basis-Eigenschaften + Anzeige-Settings einer Kaufreise (Config-Ressource). */
+export interface JourneyConfig {
+  slug: string
+  name: string
+  description: string
+  category: string
+  currency: string
+  sectionTitle: string
+  listTitle: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type JourneyConfigPatch = Partial<
+  Pick<JourneyConfig, 'name' | 'description' | 'category' | 'currency' | 'sectionTitle' | 'listTitle'>
+>
+
+export const JOURNEY_CATEGORIES = [
+  { value: 'fahrrad', label: 'Fahrrad' },
+  { value: 'e-auto', label: 'E-Auto / Auto' },
+  { value: 'laptop', label: 'Laptop / Computer' },
+  { value: 'haushalt', label: 'Haushalt' },
+  { value: 'immobilie', label: 'Immobilie' },
+  { value: 'sonstiges', label: 'Sonstiges' },
+] as const
+
 export interface JourneyData {
   status: JourneyStatus
   journey: JourneyLogEntry[]

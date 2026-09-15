@@ -322,6 +322,29 @@ test('journey.get liefert das komplette bike-Dokument', async (t) => {
     assert.ok(key in doc, `${key} fehlt im Dokument`);
   }
   assert.ok('feedback' in doc, 'feedback fehlt im Dokument');
+  assert.ok(doc.config && typeof doc.config === 'object', 'config fehlt im Dokument');
+  for (const key of ['slug', 'name', 'description', 'category', 'currency', 'sectionTitle', 'listTitle']) {
+    assert.ok(key in doc.config, `config.${key} fehlt`);
+  }
+  assert.equal(doc.config.slug, 'bike');
+});
+
+test('journey.get spiegelt die aktuelle Config (Basis-Eigenschaften)', async (t) => {
+  const base = await startBackend(t);
+  const put = await fetch(`${base}/api/journey-config?journey=bike`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'MCP-Bike', category: 'fahrrad', currency: '€' }),
+  });
+  assert.equal(put.status, 200);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', { name: 'journey.get', arguments: { slug: 'bike' } });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  const doc = JSON.parse(res.result.content[0].text);
+  assert.equal(doc.config.name, 'MCP-Bike');
+  assert.equal(doc.config.category, 'fahrrad');
+  assert.equal(doc.config.currency, '€');
 });
 
 test('unbekannter Slug gibt definierten Fehler und legt nichts an', async (t) => {
