@@ -1,7 +1,9 @@
 // Supabase-JWT-Prüfung für das Express-Backend (User-Layer, Phase 1: verify-only).
 //
-// First-Party-Flow (E-Mail + Passwort via supabase-js im Frontend):
-//   Frontend: supabase.auth.signInWithPassword() -> access_token (JWT, iss `<SUPABASE_URL>/auth/v1`)
+// Login-Flows (alle via supabase-js im Frontend, alle liefern dasselbe JWT):
+//   - E-Mail + Passwort: supabase.auth.signInWithPassword() -> access_token
+//   - OAuth (Google/Apple): supabase.auth.signInWithOAuth({ provider }) ->
+//     Provider-Redirect -> Rücksprung auf /login -> access_token
 //   Frontend: fetch('/api/...', { headers: { Authorization: `Bearer ${token}` } })
 //   Backend hier: Bearer-Token extrahieren, per Supabase-Auth `auth.getUser(token)`
 //   verifizieren (Netzwerk-Verifizierung; funktioniert für ES256-asymmetrisch —

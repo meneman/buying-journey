@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { JourneySwitcher } from './JourneySwitcher'
 import { NavTabs } from './NavTabs'
 import { ThemeToggle } from './ThemeToggle'
-import { useAuth } from '@/lib/auth-context'
+import { useAuth, useLoggedIn } from '@/lib/auth-context'
 import { usePageSync } from '@/lib/page-sync-context'
 import { useRouter } from '@/lib/router'
 import { cn } from '@/lib/utils'
@@ -35,21 +35,17 @@ function RouteMark() {
 export function AppHeader() {
   const { status, reload } = usePageSync()
   const { user, configured, signOut } = useAuth()
+  const { loggedIn, loading } = useLoggedIn()
   const { navigate } = useRouter()
   const copy = STATUS_COPY[status]
+  const showNav = loggedIn && !loading
 
   return (
     <header className="border-b border-border bg-card">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-4 py-3 sm:px-6">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-4 py-2.5 sm:px-6">
         <div className="flex items-center gap-2.5">
           <RouteMark />
           <span className="font-heading text-lg leading-none font-semibold tracking-tight">JourneyPath</span>
-        </div>
-
-        <JourneySwitcher />
-
-        <div className="order-last w-full sm:order-none sm:w-auto">
-          <NavTabs />
         </div>
 
         <div className="ml-auto flex items-center gap-2">
@@ -78,6 +74,15 @@ export function AppHeader() {
             ))}
         </div>
       </div>
+
+      {showNav && (
+        <div className="border-t border-border">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-4 py-2 sm:px-6">
+            <JourneySwitcher />
+            <NavTabs />
+          </div>
+        </div>
+      )}
     </header>
   )
 }

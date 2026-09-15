@@ -6,6 +6,7 @@ import { CreateJourneyDialog } from '@/components/layout/CreateJourneyDialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { fetchJourneyConfigs, fetchJourneys } from '@/lib/api'
+import { useLoggedIn } from '@/lib/auth-context'
 import { iconForJourney } from '@/lib/journey-category'
 import { readRecentJourneys } from '@/lib/journey-id'
 import type { JourneyConfig } from '@/lib/types'
@@ -34,6 +35,7 @@ function fallbackConfigs(slugs: string[]): JourneyConfig[] {
 export function JourneysOverview() {
   const [configs, setConfigs] = useState<JourneyConfig[] | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
+  const { loggedIn, loading } = useLoggedIn()
 
   useEffect(() => {
     let cancelled = false
@@ -61,10 +63,12 @@ export function JourneysOverview() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-heading text-lg font-semibold">Meine Kaufreisen</h2>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <FontAwesomeIcon icon={faPlus} className="size-4" />
-          Neue Kaufreise
-        </Button>
+        {loggedIn && !loading && (
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <FontAwesomeIcon icon={faPlus} className="size-4" />
+            Neue Kaufreise
+          </Button>
+        )}
       </div>
 
       {configs === null ? (

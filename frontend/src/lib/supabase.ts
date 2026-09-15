@@ -20,6 +20,21 @@ export function getSupabase(): SupabaseClient | null {
   return client
 }
 
+/** OAuth-Anbieter, die die App per Supabase anbietet (Dashboard → Authentication → Providers). */
+export type OAuthProvider = 'google' | 'apple'
+
+export const OAUTH_PROVIDERS: readonly OAuthProvider[] = ['google', 'apple']
+
+export const OAUTH_PROVIDER_LABEL: Record<OAuthProvider, string> = {
+  google: 'Google',
+  apple: 'Apple',
+}
+
+/** Rücksprung-Ziel nach dem OAuth-Flow: die Login-Seite (fängt Provider-Fehler ab). */
+export function getOAuthRedirectUrl(): string {
+  return `${window.location.origin}/login`
+}
+
 /** Access-Token der aktuellen Session für `Authorization: Bearer <token>`. */
 export async function getAccessToken(): Promise<string | null> {
   const supabase = getSupabase()

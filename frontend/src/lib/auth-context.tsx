@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
-import { getSupabase, isSupabaseConfigured } from './supabase'
+import { getOAuthRedirectUrl, getSupabase, isSupabaseConfigured, type OAuthProvider } from './supabase'
 
 interface AuthContextValue {
   user: User | null
@@ -11,6 +11,13 @@ interface AuthContextValue {
   signIn: (email: string, password: string) => Promise<string | null>
   /** Registriert, gibt bei Fehler die Nachricht zurück (sonst null). */
   signUp: (email: string, password: string) => Promise<string | null>
+  /**
+   * Startet den OAuth-Flow (Google/Apple): leitet zum Anbieter weiter.
+   * Gibt bei Fehler die Nachricht zurück (sonst null) — im Erfolg verlässt
+   * die Seite die App; nach dem Redirect liest supabase-js die Session aus
+   * der URL (`detectSessionInUrl`) und `onAuthStateChange` setzt den Nutzer.
+   */
+  signInWithProvider: (provider: OAuthProvider) => Promise<string | null>
   signOut: () => Promise<void>
 }
 
@@ -57,13 +64,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return error ? error.message : null
   }
 
+  const signInWithProvider = async (provider: OAuthProvider): Promise<string | null> => {
+    const supabase = getSupabase()
+    if (!supabase) return NOT_CONFIGURED
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: { redirectTo: getOAuthRedirectUrl() },
+    })
+    return error ? error.message : null
+  }
+
   const signOut = async (): Promise<void> => {
     await getSupabase()?.auth.signOut()
   }
 
   return (
     <AuthContext.Provider
-      value={{ user, session, loading, configured: isSupabaseConfigured, signIn, signUp, signOut }}
+      value={{
+        user,
+        session,
+        loading,
+        configured: isSupabaseConfigured,
+        signIn,
+        signUp,
+        signInWithProvider,
+        signOut,
+      }}
     >
       {children}
     </AuthContext.Provider>
@@ -74,4 +100,14 @@ export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext)
   if (!ctx) throw new Error('useAuth must be used within an AuthProvider')
   return ctx
+}
+
+/**
+ * Globaler Login/Logout-Schalter: einzige Quelle dafür, ob die volle
+ * Navigation sichtbar ist. Ohne konfiguriertes Supabase gibt es kein Auth —
+ * dann ist alles sichtbar (wie eingeloggt), damit nichts ausgesperrt wird.
+ */
+export function useLoggedIn(): { loggedIn: boolean; loading: boolean } {
+  const { user, loading, configured } = useAuth()
+  return { loggedIn: !configured || user !== null, loading }
 }
