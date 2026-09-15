@@ -35,6 +35,37 @@ app.get('/api/config', (req, res) => {
   res.json({ storage: 'sqlite' });
 });
 
+// MCP-Status für die `/mcp`-Seite im Frontend (read-only, öffentlich wie
+// `/api/config`, damit die Anleitung auch ausgeloggt lesbar bleibt):
+// Name/Version/Protokoll + Tool-Liste aus `src/mcp/tools.js` (gleiche Quelle
+// wie `tools/list` des stdio-Servers). Der Browser kann kein stdio-JSON-RPC
+// sprechen, daher dient dieser Endpunkt als HTTP-Quelle der Tool-Liste; ein
+// erfolgreicher Fetch bedeutet zugleich "Backend erreichbar".
+const {
+  SERVER_INFO: MCP_SERVER_INFO,
+  PROTOCOL_VERSION: MCP_PROTOCOL_VERSION,
+  TOOL_DEFS: MCP_TOOL_DEFS,
+} = require('../../mcp/tools.js');
+
+app.get('/api/mcp-status', (req, res) => {
+  const rawPort = process.env.PORT;
+  const parsedPort = Number(rawPort);
+  const port = rawPort !== undefined && rawPort !== '' && Number.isFinite(parsedPort) ? parsedPort : 3000;
+  const baseUrl = process.env.MCP_BASE_URL || `http://localhost:${port}`;
+  res.json({
+    server: MCP_SERVER_INFO,
+    protocolVersion: MCP_PROTOCOL_VERSION,
+    tools: MCP_TOOL_DEFS.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+    })),
+    serverFile: path.resolve(__dirname, '../../mcp/server.js'),
+    port,
+    baseUrl,
+  });
+});
+
 // Aktueller Nutzer aus dem Supabase-JWT (Bearer-Token). 200 mit { user },
 // sonst 401 — immer optional ausgewertet, damit die Antwort stabil bleibt,
 // egal ob AUTH_REQUIRED gesetzt ist.

@@ -32,6 +32,36 @@ export function fetchMe(): Promise<{ user: AuthUser }> {
   return request<{ user: AuthUser }>('/api/me')
 }
 
+export interface McpToolInputSchema {
+  type: string
+  properties?: Record<string, { type?: string; description?: string }>
+  required?: string[]
+}
+
+export interface McpToolInfo {
+  name: string
+  description: string
+  inputSchema?: McpToolInputSchema
+}
+
+export interface McpStatus {
+  server: { name: string; version: string }
+  protocolVersion: string
+  tools: McpToolInfo[]
+  serverFile?: string
+  port?: number
+  baseUrl?: string
+}
+
+/**
+ * MCP-Status (Name/Version/Tool-Liste aus `GET /api/mcp-status`). Wirft bei
+ * gestopptem Backend — die `/mcp`-Seite bleibt dann trotzdem lesbar und zeigt
+ * nur den Status rot.
+ */
+export function fetchMcpStatus(): Promise<McpStatus> {
+  return request<McpStatus>('/api/mcp-status')
+}
+
 export function fetchJourneys(): Promise<string[]> {
   return request<string[]>('/api/journeys')
 }

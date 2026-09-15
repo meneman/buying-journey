@@ -377,3 +377,53 @@ test('unerreichbares Backend gibt definierten Tool-Fehler', async (t) => {
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /nicht erreichbar/);
 });
+
+test('GET /api/mcp-status liefert Server-Info und Tool-Liste (für die /mcp-Seite)', async (t) => {
+  const base = await startBackend(t);
+  const res = await fetch(`${base}/api/mcp-status`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body.server, { name: 'bike-buying-journey', version: '1.0.0' });
+  assert.equal(body.protocolVersion, '2024-11-05');
+  assert.deepEqual(
+    body.tools.map((tool) => tool.name),
+    ['journey.get', 'journey.add_item', 'journey.crawl_link']
+  );
+  for (const tool of body.tools) {
+    assert.ok(tool.description && tool.description.length > 0, `${tool.name} ohne Beschreibung`);
+    assert.ok(tool.inputSchema && typeof tool.inputSchema === 'object', `${tool.name} ohne inputSchema`);
+    assert.equal(tool.inputSchema.type, 'object');
+    assert.ok(
+      Array.isArray(tool.inputSchema.required) && tool.inputSchema.required.length > 0,
+      `${tool.name} ohne inputSchema.required`
+    );
+  }
+  assert.ok(
+    typeof body.serverFile === 'string' &&
+      body.serverFile.endsWith(path.join('src', 'mcp', 'server.js')),
+    `serverFile zeigt nicht auf src/mcp/server.js: ${body.serverFile}`
+  );
+  assert.equal(typeof body.port, 'number');
+  const expectedPort = Number(process.env.PORT);
+  assert.equal(body.port, expectedPort);
+  const expectedBase = process.env.MCP_BASE_URL || `http://localhost:${body.port}`;
+  assert.equal(body.baseUrl, expectedBase);
+});
+
+test('GET /api/mcp-status spiegelt tools/list des MCP-Servers', async (t) => {
+  const base = await startBackend(t);
+  const status = await (await fetch(`${base}/api/mcp-status`)).json();
+  const client = startMcp(t, base);
+  await handshake(client);
+  const listed = await client.rpc('tools/list', {});
+  assert.deepEqual(
+    listed.result.tools.map((tool) => tool.name).sort(),
+    status.tools.map((tool) => tool.name).sort()
+  );
+  for (const tool of listed.result.tools) {
+    const mirrored = status.tools.find((x) => x.name === tool.name);
+    assert.ok(mirrored, `${tool.name} fehlt in /api/mcp-status`);
+    assert.equal(mirrored.description, tool.description);
+    assert.deepEqual(mirrored.inputSchema, tool.inputSchema);
+  }
+});

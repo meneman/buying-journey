@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faArrowsRotate } from '@fortawesome/free-solid-svg-icons'
+import { faArrowsRotate, faPlug } from '@fortawesome/free-solid-svg-icons'
 import { Button } from '@/components/ui/button'
 import { JourneySwitcher } from './JourneySwitcher'
 import { NavTabs } from './NavTabs'
@@ -36,7 +36,7 @@ export function AppHeader() {
   const { status, reload } = usePageSync()
   const { user, configured, signOut } = useAuth()
   const { loggedIn, loading } = useLoggedIn()
-  const { navigate } = useRouter()
+  const { navigate, pathname } = useRouter()
   const copy = STATUS_COPY[status]
   const showNav = loggedIn && !loading
 
@@ -50,6 +50,15 @@ export function AppHeader() {
           </div>
           <Button variant="ghost" size="icon-sm" title="Daten neu laden" onClick={reload}>
             <FontAwesomeIcon icon={faArrowsRotate} className="size-4" />
+          </Button>
+          <Button
+            variant={pathname === '/mcp' ? 'secondary' : 'ghost'}
+            size="sm"
+            title="MCP-Integration: Status + Setup"
+            onClick={() => navigate('/mcp')}
+          >
+            <FontAwesomeIcon icon={faPlug} className="size-4" />
+            <span className="hidden sm:inline">MCP</span>
           </Button>
           <ThemeToggle />
           {configured &&

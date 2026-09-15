@@ -12,6 +12,7 @@ import { Dashboard } from '@/pages/Dashboard'
 import { Feedback } from '@/pages/Feedback'
 import { JourneysOverview } from '@/pages/JourneysOverview'
 import { Login } from '@/pages/Login'
+import { Mcp } from '@/pages/Mcp'
 import { Settings } from '@/pages/Settings'
 import { Specs } from '@/pages/Specs'
 
@@ -20,8 +21,11 @@ function Routes() {
   const journey = useJourney()
   const { loggedIn, loading } = useLoggedIn()
 
-  // Ausgeloggt ist nur die Übersicht (`/` ohne `?journey=`) und `/login` erlaubt.
-  const allowedLoggedOut = pathname === '/login' || (pathname === '/' && !search.get('journey'))
+  // Ausgeloggt sind nur die Übersicht (`/` ohne `?journey=`), `/login` und die
+  // MCP-Setup-Seite (`/mcp`, app-weit ohne `?journey=`) erlaubt — die Anleitung
+  // bleibt auch ohne Login lesbar.
+  const allowedLoggedOut =
+    pathname === '/login' || pathname === '/mcp' || (pathname === '/' && !search.get('journey'))
 
   useEffect(() => {
     if (!loading && !loggedIn && !allowedLoggedOut) navigate('/')
@@ -37,6 +41,10 @@ function Routes() {
 
   if (!loggedIn && !allowedLoggedOut) {
     return null
+  }
+
+  if (pathname === '/mcp') {
+    return <Mcp />
   }
 
   if (pathname === '/feedback') {

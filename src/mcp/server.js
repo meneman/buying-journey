@@ -19,11 +19,11 @@
 // Unbekannter/leerer Slug und unerreichbares Backend liefern definierte
 // Fehler, ohne etwas anzulegen oder zu schreiben.
 
+const { SERVER_INFO, PROTOCOL_VERSION, ITEM_STATUSES, TOOL_DEFS } = require('./tools.js');
+
 const BASE_URL =
   process.env.MCP_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
 
-const SERVER_INFO = { name: 'bike-buying-journey', version: '1.0.0' };
-const PROTOCOL_VERSION = '2024-11-05';
 const FETCH_TIMEOUT_MS = 15000;
 const CRAWL_GOTO_TIMEOUT_MS = 30000;
 const CRAWL_DEFAULT_MAX_CHARS = 15000;
@@ -66,8 +66,6 @@ function starsFromRating(rating) {
   const stars = Math.max(0, Math.min(5, Math.round(Number(rating) || 0)));
   return '⭐'.repeat(stars);
 }
-
-const ITEM_STATUSES = ['Thinking', 'Shortlisted', 'Test Ridden', 'Rejected', 'Bought'];
 
 // Zerlegt den "<br>"-Specs-String der REST-Darstellung in Key/Value-Paare plus
 // Freitext-Zeilen — gleiche Konvention wie src/agent/scripts/add-item.js.
@@ -329,58 +327,6 @@ async function assertKnownJourney(slug) {
   return journeys;
 }
 
-const TOOL_DEF = {
-  name: 'journey.get',
-  description:
-    'Liest das komplette Dokument einer Buying Journey (Status, Logs, Items, Specs, Notizen, Feedback, Config mit Basis-Eigenschaften und Settings). Nur Lesen, legt nichts an.',
-  inputSchema: {
-    type: 'object',
-    properties: { slug: { type: 'string', description: 'Journey-Kürzel, z.B. "bike"' } },
-    required: ['slug'],
-  },
-};
-
-const ADD_ITEM_TOOL_DEF = {
-  name: 'journey.add_item',
-  description:
-    'Legt ein Produkt in einer Buying Journey an oder aktualisiert es (Upsert anhand des Namens, Groß-/Kleinschreibung wird ignoriert). Legt keine neue Journey an.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      slug: { type: 'string', description: 'Journey-Kürzel, z.B. "bike"' },
-      name: { type: 'string', description: 'Produktname (Pflicht, legt die Upsert-Identität fest)' },
-      price: { type: 'string', description: 'Preis als Freitext, z.B. "1499€"' },
-      rating: { type: 'number', description: 'Bewertung 0-5 (wird in ⭐-Format umgewandelt)', minimum: 0, maximum: 5 },
-      status: { type: 'string', description: 'Status des Eintrags', enum: ITEM_STATUSES },
-      notes: { type: 'string', description: 'Notizen zum Eintrag' },
-      link: { type: 'string', description: 'Produkt-URL' },
-      specs: {
-        type: 'object',
-        description: 'Freie technische Vergleichskriterien, z.B. {"weight": "15.8 kg"}',
-        additionalProperties: { type: 'string' },
-      },
-    },
-    required: ['slug', 'name'],
-  },
-};
-
-const CRAWL_TOOL_DEF = {
-  name: 'journey.crawl_link',
-  description:
-    'Lädt eine Produktseite headless und gibt Titel + Fließtext als JSON zurück (speichert nichts). Der Aufrufer extrahiert daraus Name, Preis und Specs und speichert sie danach mit journey.add_item.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      link: { type: 'string', description: 'Produkt-URL (http/https), z.B. Herstellerseite' },
-      maxChars: {
-        type: 'number',
-        description: 'Maximale Textlänge (Default 15000, Maximum 50000)',
-      },
-    },
-    required: ['link'],
-  },
-};
-
 function toolResultError(message) {
   return { content: [{ type: 'text', text: `Fehler: ${message}` }], isError: true };
 }
@@ -445,7 +391,7 @@ async function handleMessage(msg) {
     case 'ping':
       return {};
     case 'tools/list':
-      return { tools: [TOOL_DEF, ADD_ITEM_TOOL_DEF, CRAWL_TOOL_DEF] };
+      return { tools: TOOL_DEFS };
     case 'tools/call':
       return handleCall(msg.params);
     default: {

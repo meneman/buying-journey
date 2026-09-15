@@ -1,34 +1,77 @@
-# Manuelle Tests — Backend→Frontend Live-Updates (SSE) (2026-09-15)
+# Manuelle Tests — MCP-Erweiterungen (2026-09-15)
 
-Bitte zuerst selbst `npm run dev` starten (Backend auf Port `3000`, Vite-Dev-Server auf
-Port `5173`, öffnet `http://localhost:5173`; `/api`-Calls werden an das Backend geproxyt).
-Der SSE-Stream (`GET /api/data/events?journey=X`) meldet externe Änderungen nur per Toast —
-ein Reload passiert ausschließlich über den Toast-Button, nie still. Automatisiert verifiziert:
-`npm test` 64/64 grün (3 neue SSE-Tests), Frontend-Build (`tsc -b` + `vite build`) ok,
-`oxlint` 0 Errors (nur vorbestehende Warnungen).
+> Hinweis: Bitte `npm run dev` selbst starten (wird nicht automatisch gestartet).
+> Backend auf Port `3000`, Vite-Dev-Server auf Port `5173`, App unter
+> `http://localhost:5173` öffnen. `/api`-Calls werden an das Backend geproxyt.
+> Die `/mcp`-Seite ist read-only (keine editierbaren Felder) und app-weit ohne
+> `?journey=`-Param erreichbar (wie `/login`).
 
-## Toast + Reload auf geöffneter Journey (MCP-Schreibzugriff)
-- [ ] `/?journey=bike` öffnen → kein Toast beim Laden, Seite zeigt aktuellen Stand.
-- [ ] Per MCP `journey.add_item` (slug `bike`, neuer Name) speichern → oben/unten erscheint
-      Toast „Neue Daten vom MCP-Server“ mit Button „Neu laden“, KEIN automatischer Reload,
-      KEIN Seiten-Reload, laufende Eingaben bleiben erhalten.
-- [ ] „Neu laden“ klicken → das neue Item erscheint in der Liste, Toast verschwindet.
-- [ ] Erneut per MCP auf `bike` schreiben, aber VOR dem Klick auf „Neu laden“ ein Textfeld
-      editieren (z.B. Notizen, Debounce 600ms) → ohne Klick geht keine Editierung verloren;
-      erst der Klick lädt neu.
+Automatisiert verifiziert (2026-09-15):
+`npm test` 66/66 grün, Frontend-Build (`vite build`) ok (nur Chunk-Size-Warnung,
+kein Fehler), `npm --prefix frontend run lint` 0 Errors / 16 Warnings.
 
-## Fremde Journey stört nicht / Scope
-- [ ] `/?journey=bike` offen lassen, per MCP auf eine ANDERE Journey schreiben
-      (z.B. `laptop`) → kein Toast auf der Bike-Seite, keine Veränderung.
-- [ ] Feedback auf `bike` speichern (`/feedback?journey=bike`) → kein Update-Toast
-      (Feedback ist bewusst außerhalb des Live-Scopes).
+## 1) Button / Route (inkl. ausgeloggt)
 
-## Reconnect / Tabs / Journey-Wechsel
-- [ ] Backend neu starten während die Seite offen ist → nach Neustart kommt bei der
-      nächsten MCP-Änderung wieder ein Toast (Browser reconnectet automatisch, kein
-      manueller Reload nötig).
-- [ ] Zwei Tabs mit `/?journey=bike` öffnen, per MCP schreiben → beide Tabs zeigen je
-      einen Toast; in Tab 1 „Neu laden“ klicken → Tab 1 aktuell, Tab 2 behält den Toast
-      bis dort ebenfalls geklickt wird.
-- [ ] Von `/?journey=bike` zu `/?journey=laptop` wechseln → alter Toast ist weg, Stream
-      folgt der neuen Journey (MCP-Schreib auf `bike` stört auf `laptop` nicht).
+- [ ] App laden (z. B. `http://localhost:5173/`) → in der oberen Auth-Zeile steht
+      neben Reload/ThemeToggle ein Button „MCP“ mit Stecker-Icon (auch im
+      Mobile-Layout kein Umbruch-Chaos).
+- [ ] „MCP“ klicken → springt auf `/mcp` (ohne `?journey=`-Param), Button zeigt
+      aktiven Zustand.
+- [ ] Direkt-URL `http://localhost:5173/mcp` aufrufen → Seite lädt (kein Redirect,
+      kein 404).
+- [ ] Ausgeloggt (bzw. Inkognito ohne Login) → Button und `/mcp` bleiben
+      sichtbar/erreichbar; Detail-Routen (`/?journey=bike`) leiten wie bisher auf
+      die Übersicht um.
+
+## 2) Status grün (Backend läuft)
+
+- [ ] `/mcp` bei laufendem Backend → Status grün (Celeste-Punkt):
+      „Backend erreichbar — bike-buying-journey v1.0.0 (Protokoll 2024-11-05)“
+      plus Hinweis, dass `npm run mcp` separat läuft und hier nicht erkennbar ist.
+- [ ] Alle 3 Tools mit Beschreibung gelistet:
+      `journey.get`, `journey.add_item`, `journey.crawl_link`.
+
+## 3) Status rot (Backend gestoppt)
+
+- [ ] Backend stoppen (Dev-Server weiter laufen lassen), `/mcp` neu laden →
+      Status rot (Rust-Punkt): „Backend nicht erreichbar …“ mit Fehlermeldung.
+- [ ] Setup-Snippet, Selbsttest-Karte und Kurzanleitung bleiben trotzdem lesbar.
+
+## 4) Retry-Button („Erneut prüfen“)
+
+- [ ] Bei rotem Status ist der Button „Erneut prüfen“ (Rotate-Icon) sichtbar.
+- [ ] Backend wieder starten, „Erneut prüfen“ klicken → Status wechselt ohne
+      Reload zurück auf grün.
+- [ ] Bei grünem Status heißt der Button „Status aktualisieren“ (gleicher Button,
+      kein überflüssiges Element); klicken ohne Backend-Neustart → bleibt grün.
+- [ ] Backend stoppen, „Status aktualisieren“ klicken → Status wird rot, Button heißt
+      jetzt „Erneut prüfen“ (Anleitung und Snippet-Fallback bleiben lesbar).
+
+## 5) Selbsttest-Button („Lesepfad prüfen“)
+
+- [ ] Karte „Lesepfad prüfen“ → Button „Lesepfad prüfen“ (Lupen-Icon) klicken.
+- [ ] Bei laufendem Backend → Ergebniszeile „Lesepfad ok — N Journey(s) (…);
+      "bike" gelesen mit M Item(s).“
+- [ ] Während des Laufs zeigt der Button „Prüfe…“ und ist deaktiviert.
+- [ ] Bei gestopptem Backend → Ergebniszeile „Lesepfad fehlgeschlagen: …“.
+
+## 6) Snippet ohne Platzhalter kopierbar
+
+- [ ] Karte „Setup für Muse“: `pre`-Block enthält den `mcpServers`-Block für
+      `~/.config/muse/settings.json` mit `command node`,
+      `args ["/absoluter/pfad/src/mcp/server.js"]` und
+      `env { "MCP_BASE_URL": "http://localhost:3000" }` — kein
+      `<PFAD-ZUM-REPO>`-Platzhalter, direkt einfügbar (Hinweiszeile: „Pfad und URL
+      stammen aus `GET /api/mcp-status` — direkt einfügbar.“).
+- [ ] „Snippet kopieren“ klicken → Button wechselt kurz auf „Kopiert!“
+      (Check-Icon), Eingefügtes entspricht exakt dem angezeigten Block.
+- [ ] Nur falls das Backend keinen Pfad/keine URL liefert (Fallback): Platzhalter
+      `<PFAD-ZUM-REPO>` durch den absoluten Pfad dieses Checkouts ersetzen.
+
+## 7) Pflichtparameter sichtbar
+
+- [ ] Unter dem grünen Status listet jedes Tool seine Pflichtparameter, z. B.
+      `journey.get (Pflicht: slug)`, `journey.add_item (Pflicht: …)`,
+      `journey.crawl_link (Pflicht: …)` — Daten stammen aus
+      `GET /api/mcp-status` (`tool.inputSchema.required`).
+- [ ] Tools ohne Pflichtparameter zeigen keinen „(Pflicht: …)“-Zusatz.
