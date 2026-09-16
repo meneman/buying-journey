@@ -48,9 +48,16 @@ Das Frontend liegt in `frontend/` (Vite + React + TypeScript + shadcn/ui), das B
 
 ---
 
-## 🔐 Anmeldung (Supabase Auth)
+## 🔐 Anmeldung & Datentrennung pro User
 
-Die Login-Seite (`/login`) bietet **Google**, **Apple** und **E-Mail + Passwort**. Alle drei liefern dasselbe Supabase-JWT, das das Backend per `auth.getUser()` verifiziert — serverseitig ist nichts umzustellen (auch `AUTH_REQUIRED=true` gilt unverändert für OAuth-Tokens).
+Alle `/api`-Daten-Routen verlangen eine Identität (401 ohne gültigen Bearer-Token) — und jede Identität sieht **nur ihre eigenen Journeys** (Owner-Trennung per `owner_id`, gleiche Slugs verschiedener User sind unabhängige Journeys). Zwei Token-Arten werden akzeptiert:
+
+- **API-Key** (langlebig, Format `bj_…`): ein Key = ein User, gedacht für den MCP-Zugriff. Erzeugen per CLI (schreibt direkt in die DB, kein Server nötig):
+  ```bash
+  node src/agent/scripts/create-api-key.js --user "jakob" --name "Muse MCP"
+  ```
+  Der Klartext erscheint genau einmal — danach nur noch Hash in `api_keys`. Auflisten mit `--list --user …`, widerrufen mit `--revoke <id> --user …`. Alternativ per REST (mit gültigem Token): `POST /api/api-keys`, `GET /api/api-keys`, `DELETE /api/api-keys/:id`.
+- **Supabase-JWT** (Browser-Login): Die Login-Seite (`/login`) bietet **Google**, **Apple** und **E-Mail + Passwort**. Alle drei liefern dasselbe Supabase-JWT, das das Backend per `auth.getUser()` verifiziert — serverseitig ist nichts umzustellen (auch `AUTH_REQUIRED=true` gilt unverändert für OAuth-Tokens).
 
 Einmalig im [Supabase-Dashboard](https://supabase.com/dashboard) einrichten (Details siehe `.env.example`):
 
@@ -117,14 +124,19 @@ Der Prompt in `src/agent/prompts/product_extraction_prompt.md` beschreibt dieses
 
 `npm run mcp` startet den stdio-MCP-Server (`src/mcp/server.js`, ohne Dependencies) mit den Tools `journey.get` (komplettes Dokument inkl. Config lesen, legt nichts an), `journey.add_item` (Produkt anlegen/aktualisieren per Upsert), `journey.crawl_link` (Produktseite headless laden, speichert nichts) und `journey.create_from_link` (neue Journey anlegen + Initial-Link als erstes Produkt crawlen). Voraussetzung: Das Backend läuft (`npm run dev:server`, Default `http://localhost:3000`, via `MCP_BASE_URL` konfigurierbar).
 
-Einbindung in Muse Code: in `~/.config/muse/settings.json` unter `mcpServers` eintragen (wirkt ab dem nächsten Start):
+Der MCP braucht einen API-Key des Users (`MCP_AUTH_TOKEN`) — ohne ihn antwortet jedes Tool mit einem Auth-Hinweis (401), und mit ihm arbeitet der MCP ausschließlich im Namensraum dieses Users (siehe „Anmeldung & Datentrennung pro User“).
+
+Einbindung in Muse Code: in `~/.config/muse/settings.json` unter `mcpServers` eintragen (wirkt ab dem nächsten Start — **pro User ein Eintrag mit eigenem Key**):
 
 ```json
 "bike-buying-journey": {
   "type": "stdio",
   "command": "node",
   "args": ["/home/jakob/projekte/bike/src/mcp/server.js"],
-  "env": {"MCP_BASE_URL": "http://localhost:3000"},
+  "env": {
+    "MCP_BASE_URL": "http://localhost:3000",
+    "MCP_AUTH_TOKEN": "bj_… (eigener API-Key aus create-api-key.js)"
+  },
   "mode": "optional"
 }
 ```

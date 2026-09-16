@@ -161,6 +161,54 @@ function authGate(req, res, next) {
   return optionalAuth(req, res, next);
 }
 
+// --- Per-User-Identität: API-Key oder Supabase-JWT ---
+//
+// Langlebige API-Keys (`bj_` + 64 Hex-Zeichen, nur der SHA-256-Hash liegt in
+// `api_keys`) identifizieren genau einen User — ein Key pro MCP-Einstellung,
+// und der MCP arbeitet damit ausschließlich im Namensraum dieses Users.
+// Supabase-JWTs funktionieren daneben unverändert (Browser-Login).
+function isApiKeyFormat(token) {
+  return typeof token === 'string' && /^bj_[0-9a-fA-F]{64}$/.test(token.trim());
+}
+
+// Löst einen Bearer-Token zur Identität auf: erst API-Key (lokal, ohne
+// Netz), dann Supabase-JWT (nur wenn konfiguriert). Gibt null zurück, wenn
+// nichts passt — der Aufrufer entscheidet (401 beim Pflicht-Gate).
+// Ergebnis: { id, authMethod: 'api-key' | 'jwt', ... }.
+async function resolveUser(store, token) {
+  if (!token) return null;
+  if (isApiKeyFormat(token)) {
+    const hit = store.findApiKeyOwner(token.trim());
+    if (!hit) return null;
+    return { id: hit.userId, authMethod: 'api-key', keyName: hit.name };
+  }
+  if (!isAuthConfigured()) return null;
+  try {
+    const verified = await verifyAccessToken(token);
+    return { ...verified, authMethod: 'jwt' };
+  } catch {
+    return null;
+  }
+}
+
+// Pflicht-Gate für alle Daten-Routen: verlangt eine gültige Identität
+// (API-Key oder Supabase-JWT) — unabhängig von AUTH_REQUIRED, weil die
+// Owner-Trennung ohne Identität nicht greifen kann. Antwortet 401 mit dem
+// Hinweis, welcher Token-Typ erwartet wird.
+function requireUser(store) {
+  return async (req, res, next) => {
+    const user = await resolveUser(store, extractBearerToken(req));
+    if (!user) {
+      return res.status(401).json({
+        error:
+          'Anmeldung erforderlich (gültiger API-Key oder Supabase-Login als Bearer-Token).',
+      });
+    }
+    req.user = user;
+    return next();
+  };
+}
+
 function authStatus() {
   const url = supabaseUrl();
   return {
@@ -179,4 +227,7 @@ module.exports = {
   requireAuth,
   authGate,
   authStatus,
+  isApiKeyFormat,
+  resolveUser,
+  requireUser,
 };

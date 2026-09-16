@@ -15,36 +15,62 @@ function loadServer(envOverrides = {}) {
     delete require.cache[require.resolve(mod)];
   }
   delete process.env.FRONTEND_DIST;
+  const dbPath = path.join(dir, 'app.db');
   Object.assign(process.env, {
     PORT: '0',
-    DB_PATH: path.join(dir, 'app.db'),
+    DB_PATH: dbPath,
     N8N_WEBHOOK_URL: '',
   }, envOverrides);
-  return require(SERVER_PATH);
+  return { server: require(SERVER_PATH), dbPath };
 }
 
+const dbByBase = new Map();
+
 async function startApp(t, envOverrides) {
-  const { app, closeDatabase } = loadServer(envOverrides);
-  const server = await new Promise((resolve) => {
+  const { server, dbPath } = loadServer(envOverrides);
+  const { app, closeDatabase } = server;
+  const httpServer = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
+  const base = `http://127.0.0.1:${httpServer.address().port}`;
+  dbByBase.set(base, dbPath);
   t.after(() => {
-    server.closeAllConnections();
-    server.close();
+    dbByBase.delete(base);
+    httpServer.closeAllConnections();
+    httpServer.close();
     closeDatabase();
   });
-  return `http://127.0.0.1:${server.address().port}`;
+  return base;
+}
+
+/** Legt einen API-Key für `user` in der DB dieses Test-Backends an. */
+function apiKey(base, user = 'anna', name = 'test-key') {
+  const { openDatabase } = require(STORE_PATH);
+  const store = openDatabase(dbByBase.get(base));
+  try {
+    return store.createApiKey(user, name).key;
+  } finally {
+    store.close();
+  }
+}
+
+const defaultKeys = new Map();
+function testKey(base, user = 'anna') {
+  const mapKey = `${base}::${user}`;
+  if (!defaultKeys.has(mapKey)) defaultKeys.set(mapKey, apiKey(base, user));
+  return defaultKeys.get(mapKey);
 }
 
 // Öffnet einen SSE-Stream und sammelt Events (`event:` + `data:`-Blöcke).
 // Wichtig: erst auf `ready` warten — sonst rasen POST und Subscribe um die Wette.
-function openSse(base, journey) {
+function openSse(base, journey, key) {
   const url = `${base}/api/data/events?journey=${encodeURIComponent(journey)}`;
   const events = [];
   let buffer = '';
   let responseHeaders = null;
   let responseStatus = null;
-  const req = http.get(url, { headers: { Accept: 'text/event-stream' } }, (res) => {
+  const token = key !== undefined ? key : testKey(base);
+  const req = http.get(url, { headers: { Accept: 'text/event-stream', Authorization: `Bearer ${token}` } }, (res) => {
     responseStatus = res.statusCode;
     responseHeaders = res.headers;
     res.setEncoding('utf8');
@@ -87,10 +113,10 @@ async function waitFor(events, predicate, timeoutMs, label) {
   throw new Error(`Timeout beim Warten auf SSE-Event (${label})`);
 }
 
-async function postJson(base, urlPath, body) {
+async function postJson(base, urlPath, body, key) {
   return fetch(`${base}${urlPath}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key !== undefined ? key : testKey(base)}` },
     body: JSON.stringify(body),
   });
 }
@@ -137,6 +163,36 @@ test('SSE-Stream bleibt still bei Schreibzugriff auf andere Journey', async (t) 
     0,
     'kein journey-updated für fremde Journey erwartet'
   );
+});
+
+test('SSE bleibt still bei Schreibzugriff eines anderen Users auf denselben Slug', async (t) => {
+  const base = await startApp(t);
+  const sse = openSse(base, 'bike', testKey(base, 'anna'));
+  t.after(() => sse.close());
+  await waitFor(sse.events, (e) => e.event === 'ready', 2000, 'ready');
+
+  // Benni schreibt auf "seine" bike-Journey — Annas Stream bleibt still.
+  const save = await postJson(base, '/api/data?journey=bike', MIN_DOC, testKey(base, 'benni'));
+  assert.equal(save.status, 200);
+
+  await new Promise((r) => setTimeout(r, 600));
+  assert.equal(
+    sse.events.filter((e) => e.event === 'journey-updated').length,
+    0,
+    'kein journey-updated für fremden Owner erwartet'
+  );
+});
+
+test('SSE ohne Token antwortet 401 statt Stream', async (t) => {
+  const base = await startApp(t);
+  const url = `${base}/api/data/events?journey=bike`;
+  const status = await new Promise((resolve, reject) => {
+    http.get(url, (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    }).on('error', reject);
+  });
+  assert.equal(status, 401);
 });
 
 test('POST /api/feedback triggert kein journey-updated (Scope: nur /api/data)', async (t) => {

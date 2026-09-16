@@ -38,8 +38,8 @@ test('save/get round-trips a full journey document', async (t) => {
     sectionTitle: 'Bikes Under Consideration',
     listTitle: 'Rahmengrößen',
   };
-  store.saveJourneyData('bike', doc);
-  assert.deepEqual(store.getJourneyData('bike'), {
+  store.saveJourneyData('bike', 'anna', doc);
+  assert.deepEqual(store.getJourneyData('bike', 'anna'), {
     ...doc,
     headers: ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link'],
   });
@@ -47,36 +47,98 @@ test('save/get round-trips a full journey document', async (t) => {
 
 test('heterogeneous journeys stay isolated and queryable via JSON1', async (t) => {
   const store = memDb(t);
-  store.saveJourneyData('bike', {
+  store.saveJourneyData('bike', 'anna', {
     status: {}, journey: [],
     items: [{ name: 'Cube', specs: 'Gewicht: 15.8 kg', status: 'Thinking' }],
     specs: [], generalNotes: '',
   });
-  store.saveJourneyData('laptop', {
+  store.saveJourneyData('laptop', 'anna', {
     status: {}, journey: [],
     items: [{ name: 'MacBook', specs: 'CPU: M3 <br> RAM: 16 GB', status: 'Thinking' }],
     specs: [], generalNotes: '',
   });
-  assert.deepEqual(store.specValues('bike', 'gewicht'), [{ name: 'Cube', value: '15.8 kg' }]);
-  assert.deepEqual(store.specValues('bike', 'cpu'), []);
-  assert.deepEqual(store.specValues('laptop', 'cpu'), [{ name: 'MacBook', value: 'M3' }]);
-  assert.deepEqual(store.listJourneys().sort(), ['bike', 'laptop']);
+  assert.deepEqual(store.specValues('bike', 'anna', 'gewicht'), [{ name: 'Cube', value: '15.8 kg' }]);
+  assert.deepEqual(store.specValues('bike', 'anna', 'cpu'), []);
+  assert.deepEqual(store.specValues('laptop', 'anna', 'cpu'), [{ name: 'MacBook', value: 'M3' }]);
+  assert.deepEqual(store.listJourneys('anna').sort(), ['bike', 'laptop']);
+});
+
+test('same slug in different owner namespaces stays fully separate', async (t) => {
+  const store = memDb(t);
+  store.saveJourneyData('bike', 'anna', {
+    status: {}, journey: [], specs: [], generalNotes: '',
+    items: [{ name: 'Annas Rad', price: '999€', status: 'Thinking' }],
+  });
+  // Benni sieht nichts von Anna — weder Liste noch Items noch Specs.
+  assert.deepEqual(store.listJourneys('benni'), []);
+  assert.deepEqual(store.getJourneyData('bike', 'benni').items, []);
+  assert.deepEqual(store.specValues('bike', 'benni', 'gewicht'), []);
+  // Bennis Schreiben legt eine eigene, unabhängige Journey an.
+  store.saveJourneyData('bike', 'benni', {
+    status: {}, journey: [], specs: [], generalNotes: '',
+    items: [{ name: 'Bennis Rad', price: '1€', status: 'Thinking' }],
+  });
+  assert.deepEqual(
+    store.getJourneyData('bike', 'anna').items.map((i) => i.name),
+    ['Annas Rad']
+  );
+  assert.deepEqual(
+    store.getJourneyData('bike', 'benni').items.map((i) => i.name),
+    ['Bennis Rad']
+  );
+  assert.deepEqual(store.listJourneys('anna'), ['bike']);
+  assert.deepEqual(store.listJourneys('benni'), ['bike']);
+  // Configs sind ebenfalls getrennt.
+  store.saveJourneyConfig('bike', 'anna', { name: 'Annas Bikes' });
+  assert.equal(store.getJourneyConfig('bike', 'anna').name, 'Annas Bikes');
+  assert.equal(store.getJourneyConfig('bike', 'benni').name, 'bike');
+  // Doppelte Slugs pro Owner bleiben verboten, quer ist erlaubt.
+  store.createJourney('eigen', 'anna', {});
+  assert.throws(() => store.createJourney('eigen', 'anna', {}), /existiert bereits/);
+  store.createJourney('eigen', 'benni', {});
+  // Ohne Owner geht nichts.
+  assert.throws(() => store.listJourneys(''), /Owner/);
+  assert.throws(() => store.getJourneyData('bike', null), /Owner/);
+});
+
+test('api keys resolve to their owner, revoke stops them', async (t) => {
+  const store = memDb(t);
+  assert.equal(store.isApiKeyFormat('kein-key'), false);
+  assert.equal(store.isApiKeyFormat('bj_' + 'a'.repeat(64)), true);
+  const created = store.createApiKey('anna', 'Muse MCP');
+  assert.ok(store.isApiKeyFormat(created.key));
+  assert.equal(typeof created.id, 'number');
+  const hit = store.findApiKeyOwner(created.key);
+  assert.equal(hit.userId, 'anna');
+  assert.equal(hit.name, 'Muse MCP');
+  assert.equal(store.findApiKeyOwner('bj_' + 'b'.repeat(64)), null);
+  assert.equal(store.findApiKeyOwner('supabase.jwt.token'), null);
+  assert.deepEqual(
+    store.listApiKeys('anna').map((k) => k.name),
+    ['Muse MCP']
+  );
+  assert.deepEqual(store.listApiKeys('benni'), []);
+  assert.equal(store.revokeApiKey('benni', created.id), false);
+  assert.equal(store.revokeApiKey('anna', created.id), true);
+  assert.equal(store.findApiKeyOwner(created.key), null);
+  assert.deepEqual(store.listApiKeys('anna'), []);
+  assert.throws(() => store.createApiKey('  ', 'x'), /userId/);
 });
 
 test('unknown journeys start with defaults and reject bad input', async (t) => {
   const store = memDb(t);
-  const data = store.getJourneyData('gravel');
+  const data = store.getJourneyData('gravel', 'anna');
   assert.equal(data.status.phase, 'Planning');
   assert.deepEqual(data.items, []);
-  assert.ok(store.listJourneys().includes('gravel'));
-  assert.throws(() => store.saveJourneyData('bike', null), /object/);
-  assert.throws(() => store.saveJourneyData('bike', []), /object/);
-  assert.throws(() => store.saveFeedback('bike', 42), /string/);
+  assert.ok(store.listJourneys('anna').includes('gravel'));
+  assert.throws(() => store.saveJourneyData('bike', 'anna', null), /object/);
+  assert.throws(() => store.saveJourneyData('bike', 'anna', []), /object/);
+  assert.throws(() => store.saveFeedback('bike', 'anna', 42), /string/);
 });
 
 test('journey config holds base properties and settings with defaults', async (t) => {
   const store = memDb(t);
-  const config = store.getJourneyConfig('bike');
+  const config = store.getJourneyConfig('bike', 'anna');
   assert.equal(config.slug, 'bike');
   assert.equal(config.name, 'bike');
   assert.equal(config.description, '');
@@ -89,24 +151,24 @@ test('journey config holds base properties and settings with defaults', async (t
 
 test('saveJourneyConfig patches fields and lists configs slug-sorted', async (t) => {
   const store = memDb(t);
-  store.createJourney('zebra', { name: 'Zebra-Zeug' });
-  const updated = store.saveJourneyConfig('bike', { name: 'Mein Bike', category: 'Fahrrad' });
+  store.createJourney('zebra', 'anna', { name: 'Zebra-Zeug' });
+  const updated = store.saveJourneyConfig('bike', 'anna', { name: 'Mein Bike', category: 'Fahrrad' });
   assert.equal(updated.name, 'Mein Bike');
   assert.equal(updated.category, 'fahrrad');
-  const configs = store.listJourneyConfigs();
+  const configs = store.listJourneyConfigs('anna');
   assert.deepEqual(configs.map((c) => c.slug), ['bike', 'zebra']);
   assert.equal(configs[0].name, 'Mein Bike');
 
-  assert.throws(() => store.saveJourneyConfig('bike', {}), /leer/);
-  assert.throws(() => store.saveJourneyConfig('bike', null), /Objekt/);
-  assert.throws(() => store.saveJourneyConfig('bike', { nope: 'x' }), /Unbekannt/);
-  assert.throws(() => store.saveJourneyConfig('bike', { name: 42 }), /String/);
-  assert.throws(() => store.saveJourneyConfig('bike', { name: 'x'.repeat(81) }), /zu lang/);
+  assert.throws(() => store.saveJourneyConfig('bike', 'anna', {}), /leer/);
+  assert.throws(() => store.saveJourneyConfig('bike', 'anna', null), /Objekt/);
+  assert.throws(() => store.saveJourneyConfig('bike', 'anna', { nope: 'x' }), /Unbekannt/);
+  assert.throws(() => store.saveJourneyConfig('bike', 'anna', { name: 42 }), /String/);
+  assert.throws(() => store.saveJourneyConfig('bike', 'anna', { name: 'x'.repeat(81) }), /zu lang/);
 });
 
 test('feedback round-trips with a sensible default', async (t) => {
   const store = memDb(t);
-  assert.ok(store.getFeedback('bike').includes('Feedback'));
-  store.saveFeedback('bike', 'Eigene Notizen');
-  assert.equal(store.getFeedback('bike'), 'Eigene Notizen');
+  assert.ok(store.getFeedback('bike', 'anna').includes('Feedback'));
+  store.saveFeedback('bike', 'anna', 'Eigene Notizen');
+  assert.equal(store.getFeedback('bike', 'anna'), 'Eigene Notizen');
 });

@@ -15,31 +15,65 @@ function loadServer(envOverrides = {}) {
     delete require.cache[require.resolve(mod)];
   }
   delete process.env.FRONTEND_DIST;
+  const dbPath = path.join(dir, 'app.db');
   Object.assign(process.env, {
     PORT: '0',
-    DB_PATH: path.join(dir, 'app.db'),
+    DB_PATH: dbPath,
     N8N_WEBHOOK_URL: '',
   }, envOverrides);
-  return require(SERVER_PATH);
+  return { server: require(SERVER_PATH), dbPath };
 }
+
+const dbByBase = new Map(); // base-URL -> DB_PATH des Test-Backends
 
 async function startApp(t, envOverrides) {
-  const { app, closeDatabase } = loadServer(envOverrides);
-  const server = await new Promise((resolve) => {
+  const { server, dbPath } = loadServer(envOverrides);
+  const { app, closeDatabase } = server;
+  const httpServer = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
+  const base = `http://127.0.0.1:${httpServer.address().port}`;
+  dbByBase.set(base, dbPath);
   t.after(() => {
-    server.closeAllConnections();
-    server.close();
+    dbByBase.delete(base);
+    httpServer.closeAllConnections();
+    httpServer.close();
     closeDatabase();
   });
-  return `http://127.0.0.1:${server.address().port}`;
+  return base;
 }
 
-async function postJson(base, path, body, rawBody) {
+/** Legt einen API-Key für `user` in der DB dieses Test-Backends an. */
+function apiKey(base, user = 'anna', name = 'test-key') {
+  const { openDatabase } = require(STORE_PATH);
+  const store = openDatabase(dbByBase.get(base));
+  try {
+    return store.createApiKey(user, name).key;
+  } finally {
+    store.close();
+  }
+}
+
+const defaultKeys = new Map();
+function testKey(base, user = 'anna') {
+  const mapKey = `${base}::${user}`;
+  if (!defaultKeys.has(mapKey)) defaultKeys.set(mapKey, apiKey(base, user));
+  return defaultKeys.get(mapKey);
+}
+
+function withAuth(key) {
+  return { Authorization: `Bearer ${key}` };
+}
+
+/** GET mit Auth (Default-User 'anna'), sofern kein Key übergeben wird. */
+function getAuthed(base, urlPath, key) {
+  return fetch(`${base}${urlPath}`, { headers: withAuth(key !== undefined ? key : testKey(base)) });
+}
+
+async function postJson(base, path, body, rawBody, key) {
   return fetch(`${base}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(key !== undefined ? key : testKey(base)) },
     body: rawBody !== undefined ? rawBody : JSON.stringify(body),
   });
 }
@@ -53,7 +87,10 @@ test('GET /api/config reports the sqlite storage backend', async (t) => {
 
 test('journeys start with bike and data round-trips through SQLite', async (t) => {
   const base = await startApp(t);
-  const journeys = await (await fetch(`${base}/api/journeys`)).json();
+  // Lazy-Creation im eigenen Namensraum: Erst der GET legt "bike" für Anna an.
+  const empty = await (await getAuthed(base, '/api/data?journey=bike')).json();
+  assert.deepEqual(empty.items, []);
+  const journeys = await (await getAuthed(base, '/api/journeys')).json();
   assert.ok(journeys.includes('bike'));
 
   const doc = {
@@ -79,7 +116,7 @@ test('journeys start with bike and data round-trips through SQLite', async (t) =
   assert.equal(save.status, 200);
   assert.deepEqual(await save.json(), { success: true });
 
-  const loaded = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  const loaded = await (await getAuthed(base, '/api/data?journey=bike')).json();
   assert.deepEqual(loaded, { ...doc, headers: ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link'] });
 });
 
@@ -90,21 +127,21 @@ test('journeys are isolated with heterogeneous specs', async (t) => {
     items: [{ name: 'MacBook', specs: 'CPU: M3', status: 'Thinking' }],
     specs: [], generalNotes: '',
   });
-  const bike = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  const bike = await (await getAuthed(base, '/api/data?journey=bike')).json();
   assert.deepEqual(bike.items, []);
-  const journeys = await (await fetch(`${base}/api/journeys`)).json();
+  const journeys = await (await getAuthed(base, '/api/journeys')).json();
   assert.ok(journeys.includes('bike') && journeys.includes('laptop'));
 });
 
 test('GET /api/journeys lists every journey slug-sorted (start page contract)', async (t) => {
   const base = await startApp(t);
-  for (const slug of ['zebra', 'apfel']) {
+  for (const slug of ['zebra', 'apfel', 'bike']) {
     const save = await postJson(base, `/api/data?journey=${slug}`, {
       status: {}, journey: [], items: [], specs: [], generalNotes: '',
     });
     assert.equal(save.status, 200);
   }
-  const journeys = await (await fetch(`${base}/api/journeys`)).json();
+  const journeys = await (await getAuthed(base, '/api/journeys')).json();
   assert.deepEqual(journeys, ['apfel', 'bike', 'zebra']);
 });
 
@@ -120,10 +157,10 @@ test('POST /api/journeys creates a journey explicitly (no lazy GET)', async (t) 
   assert.equal(res.status, 201);
   assert.deepEqual(await res.json(), { success: true, slug: 'smartphone' });
 
-  const journeys = await (await fetch(`${base}/api/journeys`)).json();
+  const journeys = await (await getAuthed(base, '/api/journeys')).json();
   assert.ok(journeys.includes('smartphone'));
 
-  const data = await (await fetch(`${base}/api/data?journey=smartphone`)).json();
+  const data = await (await getAuthed(base, '/api/data?journey=smartphone')).json();
   assert.equal(data.status.phase, 'Planning');
   assert.equal(data.status.budget, '800€');
   assert.equal(data.status.targetDate, '2026-12-31');
@@ -139,6 +176,8 @@ test('POST /api/journeys reports duplicates with 409', async (t) => {
     assert.equal(dup.status, 409, `expected 409 for duplicate ${slug}`);
     assert.equal(typeof (await dup.json()).error, 'string');
   }
+  const bike = await postJson(base, '/api/journeys', { slug: 'bike' });
+  assert.equal(bike.status, 201);
   const dupBike = await postJson(base, '/api/journeys', { slug: 'bike' });
   assert.equal(dupBike.status, 409);
 });
@@ -161,17 +200,17 @@ test('POST /api/journeys normalizes slugs like the frontend', async (t) => {
   const res = await postJson(base, '/api/journeys', { slug: '  SmartPhone  ' });
   assert.equal(res.status, 201);
   assert.deepEqual(await res.json(), { success: true, slug: 'smartphone' });
-  const journeys = await (await fetch(`${base}/api/journeys`)).json();
+  const journeys = await (await getAuthed(base, '/api/journeys')).json();
   assert.ok(journeys.includes('smartphone'));
 });
 
 test('feedback round-trips with a default', async (t) => {
   const base = await startApp(t);
-  const initial = await (await fetch(`${base}/api/feedback?journey=bike`)).json();
+  const initial = await (await getAuthed(base, '/api/feedback?journey=bike')).json();
   assert.ok(initial.content.includes('Feedback'));
   const save = await postJson(base, '/api/feedback?journey=bike', { content: 'Eigene Notizen' });
   assert.equal(save.status, 200);
-  const loaded = await (await fetch(`${base}/api/feedback?journey=bike`)).json();
+  const loaded = await (await getAuthed(base, '/api/feedback?journey=bike')).json();
   assert.equal(loaded.content, 'Eigene Notizen');
 });
 
@@ -209,7 +248,7 @@ test('POST /api/import-link validates the link before any network use', async (t
 });
 
 test('getJourney sanitizes journey parameters', () => {
-  const { getJourney } = loadServer();
+  const { getJourney } = loadServer().server;
   assert.equal(getJourney({ query: {} }), 'bike');
   assert.equal(getJourney({ query: { journey: 'city-bike' } }), 'city-bike');
   assert.equal(getJourney({ query: { journey: ['a', 'b'] } }), 'a');
@@ -225,17 +264,17 @@ test('unknown API routes answer JSON 404', async (t) => {
   assert.equal(typeof (await res.json()).error, 'string');
 });
 
-async function putJson(base, path, body, rawBody) {
+async function putJson(base, path, body, rawBody, key) {
   return fetch(`${base}${path}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(key !== undefined ? key : testKey(base)) },
     body: rawBody !== undefined ? rawBody : JSON.stringify(body),
   });
 }
 
 test('journey config round-trips base properties and settings', async (t) => {
   const base = await startApp(t);
-  const initial = await (await fetch(`${base}/api/journey-config?journey=bike`)).json();
+  const initial = await (await getAuthed(base, '/api/journey-config?journey=bike')).json();
   assert.equal(initial.slug, 'bike');
   assert.equal(initial.name, 'bike');
   assert.equal(initial.currency, '€');
@@ -258,21 +297,22 @@ test('journey config round-trips base properties and settings', async (t) => {
   assert.equal(saved.config.category, 'fahrrad');
   assert.equal(saved.config.description, 'Pendeln + Touren');
 
-  const loaded = await (await fetch(`${base}/api/journey-config?journey=bike`)).json();
+  const loaded = await (await getAuthed(base, '/api/journey-config?journey=bike')).json();
   assert.deepEqual(loaded, saved.config);
 
   // Partial update keeps untouched fields.
   await putJson(base, '/api/journey-config?journey=bike', { name: 'Renner' });
-  const partial = await (await fetch(`${base}/api/journey-config?journey=bike`)).json();
+  const partial = await (await getAuthed(base, '/api/journey-config?journey=bike')).json();
   assert.equal(partial.name, 'Renner');
   assert.equal(partial.description, 'Pendeln + Touren');
 });
 
 test('journey configs list every journey slug-sorted (start page contract)', async (t) => {
   const base = await startApp(t);
+  await postJson(base, '/api/journeys', { slug: 'bike' });
   await postJson(base, '/api/journeys', { slug: 'zebra' });
   await postJson(base, '/api/journeys', { slug: 'apfel', name: 'Apfel-Geräte', category: 'laptop' });
-  const configs = await (await fetch(`${base}/api/journey-configs`)).json();
+  const configs = await (await getAuthed(base, '/api/journey-configs')).json();
   assert.deepEqual(configs.map((c) => c.slug), ['apfel', 'bike', 'zebra']);
   const apfel = configs.find((c) => c.slug === 'apfel');
   assert.equal(apfel.name, 'Apfel-Geräte');
@@ -307,7 +347,7 @@ test('POST /api/journeys accepts base properties as config defaults', async (t) 
     currency: '€',
   });
   assert.equal(res.status, 201);
-  const config = await (await fetch(`${base}/api/journey-config?journey=laptop`)).json();
+  const config = await (await getAuthed(base, '/api/journey-config?journey=laptop')).json();
   assert.equal(config.name, 'Notebook');
   assert.equal(config.description, 'Arbeit + Freizeit');
   assert.equal(config.category, 'laptop');

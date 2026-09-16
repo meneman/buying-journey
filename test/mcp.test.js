@@ -11,6 +11,8 @@ const SERVER_PATH = '../src/web/backend/server.js';
 const STORE_PATH = '../src/db/store.js';
 const MCP_PATH = path.join(__dirname, '..', 'src', 'mcp', 'server.js');
 
+const dbByBase = new Map(); // base-URL -> DB_PATH des Test-Backends
+
 /** Startet das Backend mit isolierter SQLite-Datei auf einem freien Port. */
 async function startBackend(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bike-mcp-test-'));
@@ -18,27 +20,72 @@ async function startBackend(t) {
     delete require.cache[require.resolve(mod)];
   }
   delete process.env.FRONTEND_DIST;
+  const dbPath = path.join(dir, 'app.db');
   Object.assign(process.env, {
     PORT: '0',
-    DB_PATH: path.join(dir, 'app.db'),
+    DB_PATH: dbPath,
     N8N_WEBHOOK_URL: '',
   });
   const { app, closeDatabase } = require(SERVER_PATH);
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  dbByBase.set(base, dbPath);
   t.after(() => {
+    dbByBase.delete(base);
     server.closeAllConnections();
     server.close();
     closeDatabase();
   });
-  return `http://127.0.0.1:${server.address().port}`;
+  return base;
 }
 
-/** Startet den MCP-Server (stdio) gegen die gegebene Basis-URL. */
-function startMcp(t, baseUrl) {
+/** Legt einen API-Key für `user` in der DB dieses Test-Backends an. */
+function apiKey(base, user = 'anna', name = 'test-key') {
+  const { openDatabase } = require(STORE_PATH);
+  const store = openDatabase(dbByBase.get(base));
+  try {
+    return store.createApiKey(user, name).key;
+  } finally {
+    store.close();
+  }
+}
+
+const defaultKeys = new Map();
+function testKey(base, user = 'anna') {
+  const mapKey = `${base}::${user}`;
+  if (!defaultKeys.has(mapKey)) defaultKeys.set(mapKey, apiKey(base, user));
+  return defaultKeys.get(mapKey);
+}
+
+/** Backend-GET mit Key-Auth (für Setup/Verifikation in den Tests). */
+function getAuthed(base, urlPath, user = 'anna') {
+  return fetch(`${base}${urlPath}`, {
+    headers: { Authorization: `Bearer ${testKey(base, user)}` },
+  });
+}
+
+/** Legt die Journey explizit an (der MCP legt nie still an — Setup pro Test). */
+async function ensureJourneyApi(base, slug, user = 'anna') {
+  const res = await fetch(`${base}/api/journeys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${testKey(base, user)}` },
+    body: JSON.stringify({ slug }),
+  });
+  assert.ok(res.status === 201 || res.status === 409, `Setup-Create scheiterte: ${res.status}`);
+}
+
+/** Startet den MCP-Server (stdio) gegen die gegebene Basis-URL.
+ * Default: mit Test-Key für User 'anna' (wie eine echte MCP-Einstellung mit
+ * MCP_AUTH_TOKEN). Explizit `null` übergeben, um ganz ohne Token zu testen. */
+function startMcp(t, baseUrl, token) {
+  const resolved = token === undefined && dbByBase.has(baseUrl) ? testKey(baseUrl) : token;
+  const env = { ...process.env, MCP_BASE_URL: baseUrl };
+  delete env.MCP_AUTH_TOKEN;
+  if (resolved) env.MCP_AUTH_TOKEN = resolved;
   const child = spawn(process.execPath, [MCP_PATH], {
-    env: { ...process.env, MCP_BASE_URL: baseUrl },
+    env,
     stdio: ['pipe', 'pipe', 'ignore'],
   });
   t.after(() => child.kill());
@@ -115,6 +162,7 @@ test('tools/list bietet journey.add_item an', async (t) => {
 
 test('journey.add_item legt ein neues Produkt an', async (t) => {
   const base = await startBackend(t);
+  await ensureJourneyApi(base, 'bike');
   const client = startMcp(t, base);
   await handshake(client);
   const res = await client.rpc('tools/call', {
@@ -133,7 +181,7 @@ test('journey.add_item legt ein neues Produkt an', async (t) => {
   assert.equal(out.success, true);
   assert.equal(out.created, true);
   assert.equal(out.item.rating, '⭐⭐⭐⭐');
-  const data = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  const data = await (await getAuthed(base, '/api/data?journey=bike')).json();
   const item = data.items.find((i) => i.name === 'MCP Testrad');
   assert.ok(item, 'Item wurde nicht in der Journey gespeichert');
   assert.equal(item.price, '999€');
@@ -142,6 +190,7 @@ test('journey.add_item legt ein neues Produkt an', async (t) => {
 
 test('journey.add_item aktualisiert ein vorhandenes Produkt ohne Duplikat', async (t) => {
   const base = await startBackend(t);
+  await ensureJourneyApi(base, 'bike');
   const client = startMcp(t, base);
   await handshake(client);
   await client.rpc('tools/call', {
@@ -155,7 +204,7 @@ test('journey.add_item aktualisiert ein vorhandenes Produkt ohne Duplikat', asyn
   assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
   const out = JSON.parse(res.result.content[0].text);
   assert.equal(out.created, false);
-  const data = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  const data = await (await getAuthed(base, '/api/data?journey=bike')).json();
   const matches = data.items.filter((i) => i.name.toLowerCase() === 'upsert-rad');
   assert.equal(matches.length, 1, 'Upsert hat ein Duplikat angelegt');
   assert.equal(matches[0].price, '1200€');
@@ -187,7 +236,7 @@ test('journey.add_item mit ungültigem Status gibt Invalid-Params-Fehler', async
 
 test('journey.add_item in unbekannter Journey legt nichts an', async (t) => {
   const base = await startBackend(t);
-  const before = await (await fetch(`${base}/api/journeys`)).json();
+  const before = await (await getAuthed(base, '/api/journeys')).json();
   const client = startMcp(t, base);
   await handshake(client);
   const res = await client.rpc('tools/call', {
@@ -196,7 +245,7 @@ test('journey.add_item in unbekannter Journey legt nichts an', async (t) => {
   });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /Unbekannte Journey/);
-  const after = await (await fetch(`${base}/api/journeys`)).json();
+  const after = await (await getAuthed(base, '/api/journeys')).json();
   assert.deepEqual(after, before);
 });
 
@@ -280,6 +329,7 @@ test('journey.crawl_link auf unerreichbaren Host gibt definierten Tool-Fehler', 
 test('Link-Flow: crawl_link und add_item speichern ein Element mit URL', async (t) => {
   const base = await startBackend(t);
   const pageUrl = await startStaticServer(t);
+  await ensureJourneyApi(base, 'bike');
   const client = startMcp(t, base);
   await handshake(client);
   const crawl = await client.rpc('tools/call', {
@@ -301,7 +351,7 @@ test('Link-Flow: crawl_link und add_item speichern ein Element mit URL', async (
   });
   assert.ok(!add.result.isError, `Add-Fehler: ${JSON.stringify(add)}`);
   assert.equal(JSON.parse(add.result.content[0].text).created, true);
-  const data = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  const data = await (await getAuthed(base, '/api/data?journey=bike')).json();
   const item = data.items.find((i) => i.name === 'MCP Testrad Pro');
   assert.ok(item, 'gecrawltes Item wurde nicht gespeichert');
   assert.equal(item.link, pageUrl);
@@ -309,6 +359,7 @@ test('Link-Flow: crawl_link und add_item speichern ein Element mit URL', async (
 
 test('journey.get liefert das komplette bike-Dokument', async (t) => {
   const base = await startBackend(t);
+  await ensureJourneyApi(base, 'bike');
   const client = startMcp(t, base);
   await handshake(client);
   const res = await client.rpc('tools/call', { name: 'journey.get', arguments: { slug: 'bike' } });
@@ -333,7 +384,7 @@ test('journey.get spiegelt die aktuelle Config (Basis-Eigenschaften)', async (t)
   const base = await startBackend(t);
   const put = await fetch(`${base}/api/journey-config?journey=bike`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${testKey(base)}` },
     body: JSON.stringify({ name: 'MCP-Bike', category: 'fahrrad', currency: '€' }),
   });
   assert.equal(put.status, 200);
@@ -349,7 +400,7 @@ test('journey.get spiegelt die aktuelle Config (Basis-Eigenschaften)', async (t)
 
 test('unbekannter Slug gibt definierten Fehler und legt nichts an', async (t) => {
   const base = await startBackend(t);
-  const before = await (await fetch(`${base}/api/journeys`)).json();
+  const before = await (await getAuthed(base, '/api/journeys')).json();
   const client = startMcp(t, base);
   await handshake(client);
   const res = await client.rpc('tools/call', {
@@ -358,7 +409,7 @@ test('unbekannter Slug gibt definierten Fehler und legt nichts an', async (t) =>
   });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /Unbekannte Journey/);
-  const after = await (await fetch(`${base}/api/journeys`)).json();
+  const after = await (await getAuthed(base, '/api/journeys')).json();
   assert.deepEqual(after, before);
 });
 
@@ -441,7 +492,7 @@ test('tools/list bietet journey.create_from_link an', async (t) => {
 test('journey.create_from_link legt Journey mit gecrawltem Erstprodukt an', async (t) => {
   const base = await startBackend(t);
   const pageUrl = await startStaticServer(t);
-  const before = await (await fetch(`${base}/api/journeys`)).json();
+  const before = await (await getAuthed(base, '/api/journeys')).json();
   assert.ok(!before.includes('schraenke'));
   const client = startMcp(t, base);
   await handshake(client);
@@ -456,9 +507,9 @@ test('journey.create_from_link legt Journey mit gecrawltem Erstprodukt an', asyn
   assert.equal(out.created, true);
   assert.equal(out.item.link, pageUrl);
   assert.equal(out.item.name, 'MCP Testrad Pro');
-  const after = await (await fetch(`${base}/api/journeys`)).json();
+  const after = await (await getAuthed(base, '/api/journeys')).json();
   assert.ok(after.includes('schraenke'), 'Journey wurde nicht angelegt');
-  const data = await (await fetch(`${base}/api/data?journey=schraenke`)).json();
+  const data = await (await getAuthed(base, '/api/data?journey=schraenke')).json();
   assert.equal(data.items.length, 1);
   assert.equal(data.items[0].link, pageUrl);
 });
@@ -466,8 +517,9 @@ test('journey.create_from_link legt Journey mit gecrawltem Erstprodukt an', asyn
 test('journey.create_from_link mit existierendem Slug legt nichts an', async (t) => {
   const base = await startBackend(t);
   const pageUrl = await startStaticServer(t);
-  const before = await (await fetch(`${base}/api/journeys`)).json();
-  const dataBefore = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  await ensureJourneyApi(base, 'bike');
+  const before = await (await getAuthed(base, '/api/journeys')).json();
+  const dataBefore = await (await getAuthed(base, '/api/data?journey=bike')).json();
   const client = startMcp(t, base);
   await handshake(client);
   const res = await client.rpc('tools/call', {
@@ -476,9 +528,9 @@ test('journey.create_from_link mit existierendem Slug legt nichts an', async (t)
   });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /existiert bereits/);
-  const after = await (await fetch(`${base}/api/journeys`)).json();
+  const after = await (await getAuthed(base, '/api/journeys')).json();
   assert.deepEqual(after, before);
-  const dataAfter = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  const dataAfter = await (await getAuthed(base, '/api/data?journey=bike')).json();
   assert.deepEqual(dataAfter.items, dataBefore.items);
 });
 
@@ -500,7 +552,7 @@ test('journey.create_from_link ohne Slug oder mit ungültigem Link gibt Invalid-
 
 test('journey.create_from_link auf unerreichbaren Link legt keine Journey an', async (t) => {
   const base = await startBackend(t);
-  const before = await (await fetch(`${base}/api/journeys`)).json();
+  const before = await (await getAuthed(base, '/api/journeys')).json();
   const client = startMcp(t, base);
   await handshake(client);
   const res = await client.rpc('tools/call', {
@@ -509,7 +561,7 @@ test('journey.create_from_link auf unerreichbaren Link legt keine Journey an', a
   });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /konnte nicht geladen werden/);
-  const after = await (await fetch(`${base}/api/journeys`)).json();
+  const after = await (await getAuthed(base, '/api/journeys')).json();
   assert.deepEqual(after, before);
 });
 
@@ -522,4 +574,56 @@ test('journey.create_from_link bei unerreichbarem Backend gibt definierten Tool-
   });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /nicht erreichbar/);
+});
+
+test('ohne MCP_AUTH_TOKEN meldet der MCP einen Auth-Hinweis statt Daten', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base, null);
+  await handshake(client);
+  const get = await client.rpc('tools/call', {
+    name: 'journey.get',
+    arguments: { slug: 'bike' },
+  });
+  assert.equal(get.result.isError, true);
+  assert.match(get.result.content[0].text, /MCP_AUTH_TOKEN/);
+  const add = await client.rpc('tools/call', {
+    name: 'journey.add_item',
+    arguments: { slug: 'bike', name: 'Geisterrad' },
+  });
+  assert.equal(add.result.isError, true);
+  assert.match(add.result.content[0].text, /MCP_AUTH_TOKEN/);
+});
+
+test('MCP arbeitet pro Key nur im eigenen Namensraum (Cross-User-Trennung)', async (t) => {
+  const base = await startBackend(t);
+  await ensureJourneyApi(base, 'bike', 'anna');
+  const anna = startMcp(t, base, testKey(base, 'anna'));
+  await handshake(anna);
+  const added = await anna.rpc('tools/call', {
+    name: 'journey.add_item',
+    arguments: { slug: 'bike', name: 'Annas Rad', price: '999€' },
+  });
+  assert.ok(!added.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(added)}`);
+
+  // Bennis Key sieht Annas Journey nicht — für ihn ist der Slug unbekannt.
+  const benni = startMcp(t, base, testKey(base, 'benni'));
+  await handshake(benni);
+  const get = await benni.rpc('tools/call', {
+    name: 'journey.get',
+    arguments: { slug: 'bike' },
+  });
+  assert.equal(get.result.isError, true);
+  assert.match(get.result.content[0].text, /Unbekannte Journey/);
+
+  // Bennis Schreiben auf denselben Slug legt eine getrennte Journey an.
+  await ensureJourneyApi(base, 'bike', 'benni');
+  const addedBenni = await benni.rpc('tools/call', {
+    name: 'journey.add_item',
+    arguments: { slug: 'bike', name: 'Bennis Rad' },
+  });
+  assert.ok(!addedBenni.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(addedBenni)}`);
+  const dataAnna = await (await getAuthed(base, '/api/data?journey=bike', 'anna')).json();
+  assert.deepEqual(dataAnna.items.map((i) => i.name), ['Annas Rad']);
+  const dataBenni = await (await getAuthed(base, '/api/data?journey=bike', 'benni')).json();
+  assert.deepEqual(dataBenni.items.map((i) => i.name), ['Bennis Rad']);
 });

@@ -2,7 +2,7 @@ const express = require('express');
 const dotenv = require('dotenv');
 const path = require('path');
 const { openDatabase } = require('../../db/store.js');
-const { authGate, optionalAuth } = require('./auth.js');
+const { optionalAuth, requireUser } = require('./auth.js');
 const { starsFromRating, specsToString } = require('../../core/item-format.js');
 
 // Load environment variables
@@ -15,6 +15,11 @@ const FRONTEND_DIST = process.env.FRONTEND_DIST || path.join(__dirname, '../../.
 
 // SQLite storage (file from DB_PATH, default ./data/app.db). No network, no sync.
 const store = openDatabase();
+
+// Pflicht-Gate für alle Daten-Routen: API-Key oder Supabase-JWT als
+// Bearer-Token. Die Owner-Trennung (req.user.id) funktioniert nur mit
+// Identität — anonyme Zugriffe antworten 401, unabhängig von AUTH_REQUIRED.
+const needUser = requireUser(store);
 
 app.use(express.json({ limit: '1mb' }));
 
@@ -88,13 +93,19 @@ function getJourney(req) {
 // SSE-Live-Updates pro Journey (nur `GET /api/data`-Inhalt, kein Polling):
 // Clients subscriben `GET /api/data/events?journey=X`, der Browser
 // reconnectet automatisch per `retry:` (kein manueller Reload als Dauerlösung).
-// Scope: nur `POST /api/data` broadcastet an die Clients derselben Journey.
-// `POST /api/feedback`, `PUT /api/journey-config`, `POST /api/journeys` und
-// `POST /api/import-link` (speichert nichts selbst) bleiben bewusst draußen.
-const journeySseClients = new Map(); // slug -> Set<ServerResponse>
+// Scope: nur `POST /api/data` broadcastet an die Clients derselben Journey
+// *desselben Owners* (Schlüssel `owner/slug` — kein User sieht fremde
+// Updates). `POST /api/feedback`, `PUT /api/journey-config`,
+// `POST /api/journeys` und `POST /api/import-link` (speichert nichts selbst)
+// bleiben bewusst draußen.
+const journeySseClients = new Map(); // "owner/slug" -> Set<ServerResponse>
 
-function broadcastJourneyUpdate(slug) {
-  const clients = journeySseClients.get(slug);
+function sseChannel(owner, slug) {
+  return `${owner}/${slug}`;
+}
+
+function broadcastJourneyUpdate(owner, slug) {
+  const clients = journeySseClients.get(sseChannel(owner, slug));
   if (!clients || clients.size === 0) return;
   const payload = JSON.stringify({ slug, updatedAt: new Date().toISOString() });
   const message = `event: journey-updated\ndata: ${payload}\n\n`;
@@ -107,12 +118,53 @@ function broadcastJourneyUpdate(slug) {
   }
 }
 
-// API Routes (User-Layer: authGate hängt req.user an; strikt nur mit AUTH_REQUIRED=true)
-app.get('/api/journeys', authGate, (req, res) => {
+// API Routes (User-Layer: needUser verlangt API-Key oder Supabase-JWT;
+// jede Abfrage läuft im Namensraum von req.user.id — fremde Journeys sind
+// unsichtbar und verhalten sich wie unbekannte Slugs).
+app.get('/api/journeys', needUser, (req, res) => {
   try {
-    res.json(store.listJourneys());
+    res.json(store.listJourneys(req.user.id));
   } catch (error) {
     console.error('API GET Journeys Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// API-Key-Verwaltung (langlebige MCP-Tokens, ein Key = ein User):
+// Anlegen/Listen/Widerrufen jeweils nur für die eigene Identität. Der
+// Klartext-Key erscheint genau einmal in der 201-Antwort von POST.
+app.post('/api/api-keys', needUser, (req, res) => {
+  try {
+    const name = req.body && req.body.name !== undefined ? String(req.body.name) : '';
+    if (name.length > 80) {
+      return res.status(400).json({ error: 'Feld "name" ist zu lang (max. 80 Zeichen).' });
+    }
+    const created = store.createApiKey(req.user.id, name);
+    res.status(201).json({ success: true, id: created.id, key: created.key, name: created.name });
+  } catch (error) {
+    console.error('API POST Api-Keys Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/api-keys', needUser, (req, res) => {
+  try {
+    res.json(store.listApiKeys(req.user.id));
+  } catch (error) {
+    console.error('API GET Api-Keys Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/api-keys/:id', needUser, (req, res) => {
+  try {
+    const revoked = store.revokeApiKey(req.user.id, req.params.id);
+    if (!revoked) {
+      return res.status(404).json({ error: 'API-Key nicht gefunden.' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('API DELETE Api-Keys Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -128,7 +180,7 @@ function normalizeJourneySlug(raw) {
 // currency, phase, budget, targetDate, generalNotes, sectionTitle,
 // listTitle). Answers 201 with the normalized slug, 409 when the slug
 // already exists, 400 for missing/invalid input.
-app.post('/api/journeys', authGate, (req, res) => {
+app.post('/api/journeys', needUser, (req, res) => {
   try {
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -151,7 +203,7 @@ app.post('/api/journeys', authGate, (req, res) => {
       }
     }
     try {
-      store.createJourney(slug, fields);
+      store.createJourney(slug, req.user.id, fields);
     } catch (err) {
       if (err && err.code === 'JOURNEY_EXISTS') {
         return res.status(409).json({ error: err.message });
@@ -167,9 +219,9 @@ app.post('/api/journeys', authGate, (req, res) => {
 
 // Basis-Eigenschaften + Settings aller Journeys für die Startseite
 // (slug-sortiert, ohne Items/Logs — keine N+1 Detail-Calls nötig).
-app.get('/api/journey-configs', authGate, (req, res) => {
+app.get('/api/journey-configs', needUser, (req, res) => {
   try {
-    res.json(store.listJourneyConfigs());
+    res.json(store.listJourneyConfigs(req.user.id));
   } catch (error) {
     console.error('API GET Journey-Configs Error:', error);
     res.status(500).json({ error: error.message });
@@ -182,20 +234,20 @@ app.get('/api/journey-configs', authGate, (req, res) => {
 // String, Längen begrenzt (siehe store CONFIG_LIMITS). Antworten: GET 200 mit
 // dem Config-Objekt; PUT 200 mit {success, config}; 400 bei leerem,
 // nicht-Objekt-, unbekanntem, nicht-String- oder zu langem Patch.
-app.get('/api/journey-config', authGate, (req, res) => {
+app.get('/api/journey-config', needUser, (req, res) => {
   const journey = getJourney(req);
   try {
-    res.json(store.getJourneyConfig(journey));
+    res.json(store.getJourneyConfig(journey, req.user.id));
   } catch (error) {
     console.error('API GET Journey-Config Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-app.put('/api/journey-config', authGate, (req, res) => {
+app.put('/api/journey-config', needUser, (req, res) => {
   const journey = getJourney(req);
   try {
-    const config = store.saveJourneyConfig(journey, req.body);
+    const config = store.saveJourneyConfig(journey, req.user.id, req.body);
     res.json({ success: true, config });
   } catch (error) {
     if (error && (error.code === 'CONFIG_INVALID' || error.code === 'CONFIG_UNKNOWN_FIELD')) {
@@ -206,18 +258,19 @@ app.put('/api/journey-config', authGate, (req, res) => {
   }
 });
 
-app.get('/api/data', authGate, (req, res) => {
+app.get('/api/data', needUser, (req, res) => {
   const journey = getJourney(req);
   try {
-    res.json(store.getJourneyData(journey));
+    res.json(store.getJourneyData(journey, req.user.id));
   } catch (error) {
     console.error('API GET Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-app.get('/api/data/events', authGate, (req, res) => {
+app.get('/api/data/events', needUser, (req, res) => {
   const journey = getJourney(req);
+  const channel = sseChannel(req.user.id, journey);
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -228,10 +281,10 @@ app.get('/api/data/events', authGate, (req, res) => {
   res.write('retry: 5000\n');
   res.write(`event: ready\ndata: ${JSON.stringify({ slug: journey })}\n\n`);
 
-  let clients = journeySseClients.get(journey);
+  let clients = journeySseClients.get(channel);
   if (!clients) {
     clients = new Set();
-    journeySseClients.set(journey, clients);
+    journeySseClients.set(channel, clients);
   }
   clients.add(res);
 
@@ -248,10 +301,10 @@ app.get('/api/data/events', authGate, (req, res) => {
 
   const cleanup = () => {
     clearInterval(heartbeat);
-    const current = journeySseClients.get(journey);
+    const current = journeySseClients.get(channel);
     if (current) {
       current.delete(res);
-      if (current.size === 0) journeySseClients.delete(journey);
+      if (current.size === 0) journeySseClients.delete(channel);
     }
     try {
       res.end();
@@ -262,15 +315,15 @@ app.get('/api/data/events', authGate, (req, res) => {
   req.on('close', cleanup);
 });
 
-app.post('/api/data', authGate, (req, res) => {
+app.post('/api/data', needUser, (req, res) => {
   const journey = getJourney(req);
   try {
     const data = req.body;
     if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).length === 0) {
       return res.status(400).json({ error: 'Request-Body muss ein nicht-leeres JSON-Objekt sein.' });
     }
-    store.saveJourneyData(journey, data);
-    broadcastJourneyUpdate(journey);
+    store.saveJourneyData(journey, req.user.id, data);
+    broadcastJourneyUpdate(req.user.id, journey);
     res.json({ success: true });
   } catch (error) {
     console.error('API POST Error:', error);
@@ -279,7 +332,7 @@ app.post('/api/data', authGate, (req, res) => {
 });
 
 // Sends a product URL to the n8n crawler and returns the extracted item
-app.post('/api/import-link', authGate, async (req, res) => {
+app.post('/api/import-link', needUser, async (req, res) => {
   const journey = getJourney(req);
   const { link } = req.body || {};
 
@@ -345,24 +398,24 @@ app.post('/api/import-link', authGate, async (req, res) => {
   }
 });
 
-app.get('/api/feedback', authGate, (req, res) => {
+app.get('/api/feedback', needUser, (req, res) => {
   const journey = getJourney(req);
   try {
-    res.json({ content: store.getFeedback(journey) });
+    res.json({ content: store.getFeedback(journey, req.user.id) });
   } catch (error) {
     console.error('API GET Feedback Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/feedback', authGate, (req, res) => {
+app.post('/api/feedback', needUser, (req, res) => {
   const journey = getJourney(req);
   try {
     const content = req.body ? req.body.content : undefined;
     if (typeof content !== 'string') {
       return res.status(400).json({ error: 'Feld "content" (String) ist erforderlich.' });
     }
-    store.saveFeedback(journey, content);
+    store.saveFeedback(journey, req.user.id, content);
     res.json({ success: true });
   } catch (error) {
     console.error('API POST Feedback Error:', error);

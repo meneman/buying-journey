@@ -11,6 +11,9 @@
 //
 // Das Backend muss laufen. Basis-URL konfigurierbar:
 //   MCP_BASE_URL=http://localhost:3000  (Default; sonst PORT, Default 3000)
+// Auth (Pflicht — ein Key = ein User, nur dessen Daten sind sichtbar):
+//   MCP_AUTH_TOKEN=bj_...  (langlebiger API-Key, siehe POST /api/api-keys
+//   oder src/agent/scripts/create-api-key.js)
 //
 // Protokoll: newline-delimited JSON-RPC 2.0 auf stdin/stdout (MCP-Transport),
 // Logs gehen nach stderr. Tools:
@@ -25,6 +28,27 @@ const { SERVER_INFO, PROTOCOL_VERSION, ITEM_STATUSES, TOOL_DEFS } = require('./t
 
 const BASE_URL =
   process.env.MCP_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+
+// Langlebiger API-Key des Users (ein Key = ein User, siehe POST
+// /api/api-keys bzw. src/agent/scripts/create-api-key.js). Er reist als
+// Bearer-Token mit jedem Backend-Call — der MCP arbeitet damit
+// ausschließlich im Namensraum dieses Users. Ohne Token antwortet das
+// Backend 401 (siehe Fehlermeldung in getJson/postJson).
+const AUTH_TOKEN = (process.env.MCP_AUTH_TOKEN || '').trim();
+
+function authHeaders() {
+  return AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {};
+}
+
+function backendError(url, status, snippet) {
+  if (status === 401 || status === 403) {
+    return new Error(
+      `Backend meldet HTTP ${status} für ${url}: Anmeldung fehlgeschlagen — ` +
+        'MCP_AUTH_TOKEN prüfen (gültiger API-Key des Users als Bearer-Token erforderlich).'
+    );
+  }
+  return new Error(`Backend antwortete mit HTTP ${status} für ${url}${snippet ? `: ${snippet}` : ''}`);
+}
 
 const FETCH_TIMEOUT_MS = 15000;
 const CRAWL_GOTO_TIMEOUT_MS = 30000;
@@ -42,9 +66,12 @@ function sanitizeSlug(raw) {
 }
 
 async function getJson(url) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  const res = await fetch(url, {
+    headers: authHeaders(),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
   if (!res.ok) {
-    throw new Error(`Backend antwortete mit HTTP ${res.status} für ${url}`);
+    throw backendError(url, res.status, '');
   }
   return res.json();
 }
@@ -52,13 +79,13 @@ async function getJson(url) {
 async function postJson(url, body) {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) {
     const snippet = await res.text().then((t) => t.slice(0, 300)).catch(() => '');
-    throw new Error(`Backend antwortete mit HTTP ${res.status} für ${url}: ${snippet}`);
+    throw backendError(url, res.status, snippet);
   }
   return res.json();
 }

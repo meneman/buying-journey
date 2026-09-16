@@ -8,6 +8,7 @@
 //
 // The REST wire format keeps the legacy "<br>"-joined specs string, so the
 // frontend works unchanged; conversion happens here at the storage boundary.
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
@@ -118,9 +119,28 @@ function openDatabase(dbPathExplicit) {
     db.exec('PRAGMA journal_mode = WAL');
   }
 
+  // Per-User-Trennung: Jede Journey gehört genau einer Identität (owner_id —
+  // Supabase-User-ID oder API-Key-User). Altdaten ohne Owner werden verworfen
+  // (Benutzer-Entscheidung): Existiert die Tabelle noch im alten Schema ohne
+  // owner_id, werden alle Journey-Tabellen gedroppt und im neuen Schema
+  // (zusammengesetzter Schlüssel (owner_id, slug)) neu angelegt. Kindzeilen
+  // verschwinden dabei per DROP mit — es bleibt nichts Verwaistes zurück.
+  const legacyColumns = new Set(
+    db.prepare(`PRAGMA table_info(journeys)`).all().map((c) => c.name)
+  );
+  if (legacyColumns.size > 0 && !legacyColumns.has('owner_id')) {
+    db.exec(`
+      DROP TABLE IF EXISTS items;
+      DROP TABLE IF EXISTS journey_specs;
+      DROP TABLE IF EXISTS journey_logs;
+      DROP TABLE IF EXISTS journeys;
+    `);
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS journeys (
-      slug TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      slug TEXT NOT NULL,
       name TEXT NOT NULL DEFAULT '',
       description TEXT NOT NULL DEFAULT '',
       category TEXT NOT NULL DEFAULT '',
@@ -133,25 +153,31 @@ function openDatabase(dbPathExplicit) {
       general_notes TEXT NOT NULL DEFAULT '',
       feedback TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (owner_id, slug)
     );
     CREATE TABLE IF NOT EXISTS journey_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      journey_slug TEXT NOT NULL REFERENCES journeys(slug) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      journey_slug TEXT NOT NULL,
       date TEXT NOT NULL DEFAULT '',
       event TEXT NOT NULL DEFAULT '',
-      position INTEGER NOT NULL DEFAULT 0
+      position INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (owner_id, journey_slug) REFERENCES journeys(owner_id, slug) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS journey_specs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      journey_slug TEXT NOT NULL REFERENCES journeys(slug) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      journey_slug TEXT NOT NULL,
       label TEXT NOT NULL DEFAULT '',
       value TEXT NOT NULL DEFAULT '',
-      position INTEGER NOT NULL DEFAULT 0
+      position INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (owner_id, journey_slug) REFERENCES journeys(owner_id, slug) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      journey_slug TEXT NOT NULL REFERENCES journeys(slug) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      journey_slug TEXT NOT NULL,
       name TEXT NOT NULL DEFAULT 'Unbenannt',
       price TEXT NOT NULL DEFAULT '',
       rating TEXT NOT NULL DEFAULT '',
@@ -161,45 +187,37 @@ function openDatabase(dbPathExplicit) {
       specs TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(specs)),
       position INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (owner_id, journey_slug) REFERENCES journeys(owner_id, slug) ON DELETE CASCADE
     );
-    CREATE INDEX IF NOT EXISTS idx_logs_journey ON journey_logs (journey_slug, position);
-    CREATE INDEX IF NOT EXISTS idx_specs_journey ON journey_specs (journey_slug, position);
-    CREATE INDEX IF NOT EXISTS idx_items_journey ON items (journey_slug, position);
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key_hash TEXT NOT NULL UNIQUE,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used TEXT NOT NULL DEFAULT '',
+      revoked INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_logs_journey ON journey_logs (owner_id, journey_slug, position);
+    CREATE INDEX IF NOT EXISTS idx_specs_journey ON journey_specs (owner_id, journey_slug, position);
+    CREATE INDEX IF NOT EXISTS idx_items_journey ON items (owner_id, journey_slug, position);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys (key_hash);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys (user_id);
   `);
 
-  // Migration für bestehende DB-Dateien (vor den Config-Spalten angelegt):
-  // fehlende Spalten nachrüsten und leere Basis-Felder sinnvoll füllen
-  // (name = slug, currency = €), damit alte Journeys sofort Configs zeigen.
-  ensureConfigColumns();
-  backfillConfigDefaults();
-
-  function ensureConfigColumns() {
-    const existing = new Set(
-      db.prepare(`PRAGMA table_info(journeys)`).all().map((c) => c.name)
-    );
-    for (const column of Object.values(CONFIG_COLUMNS)) {
-      if (!existing.has(column)) {
-        db.exec(`ALTER TABLE journeys ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
-      }
-    }
-  }
-
-  function backfillConfigDefaults() {
-    db.prepare(`UPDATE journeys SET name = slug WHERE name IS NULL OR name = ''`).run();
-    db.prepare(`UPDATE journeys SET currency = '€' WHERE currency IS NULL OR currency = ''`).run();
-  }
-
-  ensureJourney('bike');
-
-  function ensureJourney(slug) {
+  // Legt die Journey im Namensraum des Owners an (still, sofern fehlend).
+  // Fremde Namensräume bleiben unberührt — gleiche Slugs verschiedener
+  // User sind unabhängige Journeys.
+  function ensureOwnedJourney(slug, owner) {
     const row = defaultJourneyRow(slug);
     db.prepare(
-        `INSERT INTO journeys (slug, name, description, category, currency, section_title, list_title, phase, budget, target_date, general_notes, feedback)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (slug) DO NOTHING`
+        `INSERT INTO journeys (owner_id, slug, name, description, category, currency, section_title, list_title, phase, budget, target_date, general_notes, feedback)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (owner_id, slug) DO NOTHING`
       )
       .run(
+        owner,
         row.slug,
         row.name,
         row.description,
@@ -213,9 +231,6 @@ function openDatabase(dbPathExplicit) {
         row.general_notes,
         row.feedback
       );
-    // Falls die Zeile schon vor den Config-Spalten existierte (ON CONFLICT
-    // DO NOTHING), füllt das Backfill leere Basis-Felder nach.
-    backfillConfigDefaults();
   }
 
   function rowToConfig(r) {
@@ -232,27 +247,52 @@ function openDatabase(dbPathExplicit) {
     };
   }
 
-  function listJourneys() {
-    return db.prepare('SELECT slug FROM journeys ORDER BY slug').all().map((r) => r.slug);
+  // Alle Funktionen in diesem Abschnitt sind owner-scoped: Der erste
+  // Parameter `owner` (Supabase-User-ID oder API-Key-User) begrenzt jede
+  // Abfrage auf den eigenen Namensraum. Fremde Journeys sind unsichtbar —
+  // Aufrufer melden sie wie unbekannte Slugs.
+  function requireOwner(owner) {
+    if (typeof owner !== 'string' || !owner.trim()) {
+      const err = new Error('Owner (User-ID) ist erforderlich.');
+      err.code = 'OWNER_REQUIRED';
+      throw err;
+    }
+    return owner;
+  }
+
+  function listJourneys(owner) {
+    requireOwner(owner);
+    return db
+      .prepare('SELECT slug FROM journeys WHERE owner_id = ? ORDER BY slug')
+      .all(owner)
+      .map((r) => r.slug);
   }
 
   // Alle Journey-Configs für die Startseite (slug-sortiert, ohne Items/Logs —
   // keine N+1 Detail-Calls nötig).
-  function listJourneyConfigs() {
-    return db.prepare('SELECT * FROM journeys ORDER BY slug').all().map(rowToConfig);
+  function listJourneyConfigs(owner) {
+    requireOwner(owner);
+    return db
+      .prepare('SELECT * FROM journeys WHERE owner_id = ? ORDER BY slug')
+      .all(owner)
+      .map(rowToConfig);
   }
 
   // Basis-Eigenschaften + Settings einer Journey lesen (legt sie bei Bedarf
   // wie GET /api/data mit Defaults an).
-  function getJourneyConfig(slug) {
-    ensureJourney(slug);
-    return rowToConfig(db.prepare('SELECT * FROM journeys WHERE slug = ?').get(slug));
+  function getJourneyConfig(slug, owner) {
+    requireOwner(owner);
+    ensureOwnedJourney(slug, owner);
+    return rowToConfig(
+      db.prepare('SELECT * FROM journeys WHERE owner_id = ? AND slug = ?').get(owner, slug)
+    );
   }
 
   // Partielles Config-Update: nur bekannte Felder, alle als String, Längen
   // begrenzt (CONFIG_LIMITS). Unbekannte Felder wirft CODE 'CONFIG_UNKNOWN_FIELD',
   // Typ-/Längenfehler 'CONFIG_INVALID' — die API mappt beides auf 400.
-  function saveJourneyConfig(slug, patch) {
+  function saveJourneyConfig(slug, owner, patch) {
+    requireOwner(owner);
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
       const err = new Error('Config-Patch muss ein Objekt sein.');
       err.code = 'CONFIG_INVALID';
@@ -264,7 +304,7 @@ function openDatabase(dbPathExplicit) {
       err.code = 'CONFIG_INVALID';
       throw err;
     }
-    ensureJourney(slug);
+    ensureOwnedJourney(slug, owner);
     const sets = [];
     const values = [];
     for (const key of keys) {
@@ -291,9 +331,9 @@ function openDatabase(dbPathExplicit) {
       values.push(normalized);
     }
     db.prepare(
-      `UPDATE journeys SET ${sets.join(', ')}, updated_at = datetime('now') WHERE slug = ?`
-    ).run(...values, slug);
-    return getJourneyConfig(slug);
+      `UPDATE journeys SET ${sets.join(', ')}, updated_at = datetime('now') WHERE owner_id = ? AND slug = ?`
+    ).run(...values, owner, slug);
+    return getJourneyConfig(slug, owner);
   }
 
   // Explicit creation (used by POST /api/journeys): inserts a new journey row
@@ -301,7 +341,8 @@ function openDatabase(dbPathExplicit) {
   // never silently keeps an existing row — a duplicate slug throws with code
   // 'JOURNEY_EXISTS'. The slug is expected pre-normalized (lowercase, safe
   // chars); validation happens at the API boundary.
-  function createJourney(slug, fields = {}) {
+  function createJourney(slug, owner, fields = {}) {
+    requireOwner(owner);
     const row = defaultJourneyRow(slug);
     if (fields.name !== undefined) row.name = fields.name;
     if (fields.description !== undefined) row.description = fields.description;
@@ -313,16 +354,19 @@ function openDatabase(dbPathExplicit) {
     if (fields.generalNotes !== undefined) row.general_notes = fields.generalNotes;
     if (fields.sectionTitle !== undefined) row.section_title = fields.sectionTitle;
     if (fields.listTitle !== undefined) row.list_title = fields.listTitle;
-    const exists = db.prepare('SELECT 1 FROM journeys WHERE slug = ?').get(slug);
+    const exists = db
+      .prepare('SELECT 1 FROM journeys WHERE owner_id = ? AND slug = ?')
+      .get(owner, slug);
     if (exists) {
       const err = new Error(`Journey "${slug}" existiert bereits.`);
       err.code = 'JOURNEY_EXISTS';
       throw err;
     }
     db.prepare(
-      `INSERT INTO journeys (slug, name, description, category, currency, section_title, list_title, phase, budget, target_date, general_notes, feedback)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO journeys (owner_id, slug, name, description, category, currency, section_title, list_title, phase, budget, target_date, general_notes, feedback)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
+      owner,
       row.slug,
       row.name,
       row.description,
@@ -339,20 +383,25 @@ function openDatabase(dbPathExplicit) {
     return slug;
   }
 
-  function getJourneyData(slug) {
-    ensureJourney(slug);
-    const j = db.prepare('SELECT * FROM journeys WHERE slug = ?').get(slug);
+  function getJourneyData(slug, owner) {
+    requireOwner(owner);
+    ensureOwnedJourney(slug, owner);
+    const j = db
+      .prepare('SELECT * FROM journeys WHERE owner_id = ? AND slug = ?')
+      .get(owner, slug);
     // node:sqlite returns rows with a null prototype — normalize to plain
     // objects so the API shape is stable and deep-comparable.
     const journey = db
-      .prepare('SELECT date, event FROM journey_logs WHERE journey_slug = ? ORDER BY position, id')
-      .all(slug)
+      .prepare(
+        'SELECT date, event FROM journey_logs WHERE owner_id = ? AND journey_slug = ? ORDER BY position, id'
+      )
+      .all(owner, slug)
       .map((r) => ({ date: r.date, event: r.event }));
     const items = db
       .prepare(
-        'SELECT name, price, rating, status, notes, link, specs FROM items WHERE journey_slug = ? ORDER BY position, id'
+        'SELECT name, price, rating, status, notes, link, specs FROM items WHERE owner_id = ? AND journey_slug = ? ORDER BY position, id'
       )
-      .all(slug)
+      .all(owner, slug)
       .map((item) => ({
         name: item.name,
         price: item.price,
@@ -363,8 +412,10 @@ function openDatabase(dbPathExplicit) {
         specs: specsJsonToString(item.specs),
       }));
     const specs = db
-      .prepare('SELECT label, value FROM journey_specs WHERE journey_slug = ? ORDER BY position, id')
-      .all(slug)
+      .prepare(
+        'SELECT label, value FROM journey_specs WHERE owner_id = ? AND journey_slug = ? ORDER BY position, id'
+      )
+      .all(owner, slug)
       .map((r) => ({ label: r.label, value: r.value }));
     return {
       status: { phase: j.phase, budget: j.budget, targetDate: j.target_date },
@@ -379,17 +430,18 @@ function openDatabase(dbPathExplicit) {
   }
 
   // Full-document replace (mirrors the old whole-file markdown writes).
-  function saveJourneyData(slug, data) {
+  function saveJourneyData(slug, owner, data) {
+    requireOwner(owner);
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
       throw new Error('Journey data must be an object.');
     }
-    ensureJourney(slug);
+    ensureOwnedJourney(slug, owner);
     const status = data.status || {};
     db.exec('BEGIN');
     try {
       db.prepare(
         `UPDATE journeys SET section_title = ?, list_title = ?, phase = ?, budget = ?,
-         target_date = ?, general_notes = ?, updated_at = datetime('now') WHERE slug = ?`
+         target_date = ?, general_notes = ?, updated_at = datetime('now') WHERE owner_id = ? AND slug = ?`
       ).run(
         data.sectionTitle || 'Items Under Consideration',
         data.listTitle || 'Spezifikationen',
@@ -397,29 +449,31 @@ function openDatabase(dbPathExplicit) {
         status.budget || '',
         status.targetDate || '',
         data.generalNotes || '',
+        owner,
         slug
       );
-      db.prepare('DELETE FROM journey_logs WHERE journey_slug = ?').run(slug);
+      db.prepare('DELETE FROM journey_logs WHERE owner_id = ? AND journey_slug = ?').run(owner, slug);
       const insertLog = db.prepare(
-        'INSERT INTO journey_logs (journey_slug, date, event, position) VALUES (?, ?, ?, ?)'
+        'INSERT INTO journey_logs (owner_id, journey_slug, date, event, position) VALUES (?, ?, ?, ?, ?)'
       );
       (data.journey || []).forEach((entry, i) => {
-        insertLog.run(slug, entry.date || '', entry.event || '', i);
+        insertLog.run(owner, slug, entry.date || '', entry.event || '', i);
       });
-      db.prepare('DELETE FROM journey_specs WHERE journey_slug = ?').run(slug);
+      db.prepare('DELETE FROM journey_specs WHERE owner_id = ? AND journey_slug = ?').run(owner, slug);
       const insertSpec = db.prepare(
-        'INSERT INTO journey_specs (journey_slug, label, value, position) VALUES (?, ?, ?, ?)'
+        'INSERT INTO journey_specs (owner_id, journey_slug, label, value, position) VALUES (?, ?, ?, ?, ?)'
       );
       (data.specs || []).forEach((spec, i) => {
-        insertSpec.run(slug, spec.label || '', spec.value || '', i);
+        insertSpec.run(owner, slug, spec.label || '', spec.value || '', i);
       });
-      db.prepare('DELETE FROM items WHERE journey_slug = ?').run(slug);
+      db.prepare('DELETE FROM items WHERE owner_id = ? AND journey_slug = ?').run(owner, slug);
       const insertItem = db.prepare(
-        `INSERT INTO items (journey_slug, name, price, rating, status, notes, link, specs, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, json(?), ?)`
+        `INSERT INTO items (owner_id, journey_slug, name, price, rating, status, notes, link, specs, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, json(?), ?)`
       );
       (data.items || []).forEach((item, i) => {
         insertItem.run(
+          owner,
           slug,
           item.name || 'Unbenannt',
           item.price || '',
@@ -438,31 +492,99 @@ function openDatabase(dbPathExplicit) {
     }
   }
 
-  function getFeedback(slug) {
-    ensureJourney(slug);
-    return db.prepare('SELECT feedback FROM journeys WHERE slug = ?').get(slug).feedback;
+  function getFeedback(slug, owner) {
+    requireOwner(owner);
+    ensureOwnedJourney(slug, owner);
+    return db
+      .prepare('SELECT feedback FROM journeys WHERE owner_id = ? AND slug = ?')
+      .get(owner, slug).feedback;
   }
 
-  function saveFeedback(slug, content) {
+  function saveFeedback(slug, owner, content) {
+    requireOwner(owner);
     if (typeof content !== 'string') {
       throw new Error('Feedback content must be a string.');
     }
-    ensureJourney(slug);
-    db.prepare("UPDATE journeys SET feedback = ?, updated_at = datetime('now') WHERE slug = ?").run(content, slug);
+    ensureOwnedJourney(slug, owner);
+    db.prepare(
+      "UPDATE journeys SET feedback = ?, updated_at = datetime('now') WHERE owner_id = ? AND slug = ?"
+    ).run(content, owner, slug);
   }
 
   // Example JSON1 access: all values stored under one spec key within a journey.
-  function specValues(slug, key) {
+  function specValues(slug, owner, key) {
+    requireOwner(owner);
     return db
       .prepare(
         `SELECT items.name AS name, json_extract(j.value, '$.v') AS value
          FROM items, json_each(items.specs) AS j
-         WHERE items.journey_slug = ?
+         WHERE items.owner_id = ?
+           AND items.journey_slug = ?
            AND lower(json_extract(j.value, '$.k')) = lower(?)
          ORDER BY items.position, items.id`
       )
-      .all(slug, key)
+      .all(owner, slug, key)
       .map((r) => ({ name: r.name, value: r.value }));
+  }
+
+  // --- Langlebige API-Keys (MCP-Auth, ein Key = ein User) ---
+  //
+  // Der Klartext-Key (`bj_` + 64 Hex-Zeichen) wird genau einmal bei der
+  // Erzeugung zurückgegeben und danach nie wieder lesbar gespeichert — in
+  // der DB liegt nur der SHA-256-Hash. Prüfung daher per Hash-Vergleich.
+  function hashApiKey(plaintext) {
+    return crypto.createHash('sha256').update(String(plaintext), 'utf8').digest('hex');
+  }
+
+  function isApiKeyFormat(token) {
+    return typeof token === 'string' && /^bj_[0-9a-fA-F]{64}$/.test(token.trim());
+  }
+
+  // Erzeugt einen Key für `userId` und gibt den Klartext genau einmal zurück.
+  // Wer den Key verliert, widerruft ihn und erzeugt einen neuen.
+  function createApiKey(userId, name) {
+    if (typeof userId !== 'string' || !userId.trim()) {
+      const err = new Error('userId (nicht-leerer String) ist erforderlich.');
+      err.code = 'API_KEY_USER_INVALID';
+      throw err;
+    }
+    const cleanName = String(name ?? '').trim().slice(0, 80);
+    const key = `bj_${crypto.randomBytes(32).toString('hex')}`;
+    const info = db
+      .prepare('INSERT INTO api_keys (key_hash, user_id, name) VALUES (?, ?, ?)')
+      .run(hashApiKey(key), userId.trim(), cleanName);
+    return { id: Number(info.lastInsertRowid), key, userId: userId.trim(), name: cleanName };
+  }
+
+  function listApiKeys(userId) {
+    requireOwner(userId);
+    return db
+      .prepare(
+        'SELECT id, name, created_at, last_used FROM api_keys WHERE user_id = ? AND revoked = 0 ORDER BY id'
+      )
+      .all(userId);
+  }
+
+  // Widerruft einen Key des eigenen Users. Fremde Key-IDs melden `false`
+  // (kein Unterschied zu "gibt es nicht" — keine Aufzählungshilfe).
+  function revokeApiKey(userId, id) {
+    requireOwner(userId);
+    const info = db
+      .prepare('UPDATE api_keys SET revoked = 1 WHERE id = ? AND user_id = ? AND revoked = 0')
+      .run(Number(id), userId);
+    return info.changes > 0;
+  }
+
+  // Löst einen Klartext-Key zur Owner-Identität auf (oder null). Aktualisiert
+  // bei Treffer `last_used`. Formatfremde Tokens kosten keine DB-Abfrage.
+  function findApiKeyOwner(plaintext) {
+    if (!isApiKeyFormat(plaintext)) return null;
+    const row = db
+      .prepare('SELECT id, user_id, name FROM api_keys WHERE key_hash = ? AND revoked = 0')
+      .get(hashApiKey(plaintext.trim()));
+    if (!row) return null;
+    db.prepare('UPDATE api_keys SET last_used = datetime(\'now\') WHERE id = ?').run(row.id);
+    return { userId: row.user_id, name: row.name, keyId: row.id };
   }
 
   function close() {
@@ -481,6 +603,12 @@ function openDatabase(dbPathExplicit) {
     getFeedback,
     saveFeedback,
     specValues,
+    hashApiKey,
+    isApiKeyFormat,
+    createApiKey,
+    listApiKeys,
+    revokeApiKey,
+    findApiKeyOwner,
     close,
   };
 }

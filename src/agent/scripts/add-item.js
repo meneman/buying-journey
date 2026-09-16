@@ -18,10 +18,16 @@ for (let i = 0; i < args.length; i++) {
 
 const name = params.name;
 const journey = params.journey || 'bike';
+const user = typeof params.user === 'string' ? params.user.trim() : '';
 
 if (!name) {
   console.error('❌ Fehler: Parameter --name ist erforderlich.');
-  console.error('Verwendung: node add-item.js --name "Modellname" [--journey "bike"] [--price "Preis"] [--rating SterneAnzahl] [--status "Thinking|Shortlisted|Test Ridden|Rejected|Bought"] [weitere Attribute...]');
+  console.error('Verwendung: node add-item.js --user "jakob" --name "Modellname" [--journey "bike"] [--price "Preis"] [--rating SterneAnzahl] [--status "Thinking|Shortlisted|Test Ridden|Rejected|Bought"] [weitere Attribute...]');
+  process.exit(1);
+}
+
+if (!user) {
+  console.error('❌ Fehler: Parameter --user ist erforderlich (Owner-Trennung, z.B. --user jakob).');
   process.exit(1);
 }
 
@@ -33,7 +39,7 @@ function cliValue(value) {
 
 async function main() {
   try {
-    const data = await getData(journey);
+    const data = await getData(journey, user);
     data.items = data.items || [];
 
     // Check if item already exists
@@ -80,7 +86,7 @@ async function main() {
     if (link !== undefined) itemData.link = link;
     
     // Any extra keys are treated as specifications
-    const standardKeys = ['name', 'price', 'rating', 'status', 'notes', 'link', 'journey', 'specs'];
+    const standardKeys = ['name', 'price', 'rating', 'status', 'notes', 'link', 'journey', 'specs', 'user'];
     
     Object.keys(params).forEach(key => {
       if (standardKeys.includes(key)) return;
@@ -122,8 +128,8 @@ async function main() {
     // Force standard 7 headers
     data.headers = ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link'];
     
-    await saveData(data, journey);
-    console.log(`✅ Erfolgreich in der Kaufreise "${journey}" gespeichert!`);
+    await saveData(data, journey, user);
+    console.log(`✅ Erfolgreich in der Kaufreise "${journey}" von User "${user}" gespeichert!`);
   } catch (error) {
     console.error('❌ Fehler beim Speichern des Eintrags:', error.message);
     process.exit(1);

@@ -11,9 +11,16 @@ Dieser Skill ermöglicht es dem Agenten, komfortabel und strukturiert Produktkan
 
 Der Skill stellt Skripte zur Verfügung, mit denen du über das Terminal direkt Daten eintragen kannst.
 
+### 0. API-Key erzeugen (ein Key = ein User, für MCP-Zugriff)
+```bash
+node src/agent/scripts/create-api-key.js --user "jakob" --name "Muse MCP"
+```
+Der Klartext-Key erscheint genau einmal — er gehört als `MCP_AUTH_TOKEN` in die MCP-Einstellungen (`~/.config/muse/settings.json` → `mcpServers` → `env`). Auflisten mit `--list --user ...`, widerrufen mit `--revoke <id> --user ...`. Jeder User bekommt seinen eigenen Key; der MCP arbeitet damit ausschließlich im Namensraum dieses Users.
+
 ### 1. Eintrag hinzufügen / aktualisieren
 ```bash
 node src/agent/scripts/add-item.js \
+  --user "jakob" \
   --journey "bike" \
   --name "Cube Kathmandu Pro" \
   --price "1499€" \
@@ -27,7 +34,7 @@ node src/agent/scripts/add-item.js \
   --notes "Probefahrt war super bequem, Sattel passt perfekt." \
   --link "https://www.cube.eu/de-de/cube-kathmandu-pro-flashstone-n-black/831100"
 ```
-*(Hinweis: Für andere Produktkategorien wie Autos oder Notebooks kannst du beliebige andere Attribute übergeben — sie landen schemalos als JSON in `items.specs` dieser Journey. Gib immer den passenden Parameter `--journey` an. Es muss kein Server laufen: die Skripte schreiben direkt in `data/app.db`.)*
+*(Hinweis: Für andere Produktkategorien wie Autos oder Notebooks kannst du beliebige andere Attribute übergeben — sie landen schemalos als JSON in `items.specs` dieser Journey. Gib immer `--user` (Owner-Trennung: gleiche Slugs verschiedener User sind unabhängige Journeys) und den passenden Parameter `--journey` an. Es muss kein Server laufen: die Skripte schreiben direkt in `data/app.db`.)*
 
 **Mögliche Status-Werte:**
 - `Thinking` (In Erwägung)
@@ -39,6 +46,7 @@ node src/agent/scripts/add-item.js \
 ### 2. Tagebucheintrag (Reise) hinzufügen
 ```bash
 node src/agent/scripts/add-log.js \
+  --user "jakob" \
   --journey "bike" \
   --event "Erste Probefahrt mit dem Cube Kathmandu gemacht" \
   --date "2026-07-16"
@@ -77,7 +85,7 @@ Das Skript lädt die Seite headless über Puppeteer und speichert das Ergebnis i
 ## 🤖 Anweisungen für den Agenten
 
 ### A. Wenn der User ein Produkt oder ein Ereignis direkt nennt:
-1. Nutze `run_command` und führe das entsprechende Skript (`add-item.js` oder `add-log.js`) mit den übergebenen Parametern im Projekt-Root unter Verwendung der Pfade (`src/agent/scripts/...`) aus. Es muss kein Server laufen — die Skripte schreiben direkt in die SQLite-DB (`data/app.db`).
+1. Nutze `run_command` und führe das entsprechende Skript (`add-item.js` oder `add-log.js`) mit den übergebenen Parametern **plus `--user "<user-id>"`** im Projekt-Root unter Verwendung der Pfade (`src/agent/scripts/...`) aus. Ohne `--user` brechen die Skripte ab (Owner-Trennung). Es muss kein Server laufen — die Skripte schreiben direkt in die SQLite-DB (`data/app.db`).
 2. Die Daten liegen nur noch lokal in SQLite.
 3. Gib dem User eine kurze Bestätigung mit einem Link zum Web-Interface.
 
@@ -90,6 +98,6 @@ Das Skript lädt die Seite headless über Puppeteer und speichert das Ergebnis i
 4. **LLM-Verarbeitung**:
    * Analysiere den extrahierten Text unter Berücksichtigung von `src/agent/prompts/product_extraction_prompt.md`.
    * Identifiziere den Produktnamen, Preis, Bewertung und 3-6 relevante technische Vergleichskriterien (Specs) passend zur Produktkategorie.
-5. **Eintrag speichern**: Führe das Skript `src/agent/scripts/add-item.js` mit den extrahierten Werten aus (neue Journeys werden automatisch mit Defaults angelegt).
+5. **Eintrag speichern**: Führe das Skript `src/agent/scripts/add-item.js` mit den extrahierten Werten **plus `--user "<user-id>"`** aus (neue Journeys werden automatisch mit Defaults im Namensraum dieses Users angelegt).
 6. **Bestätigen**: Präsentiere dem User die extrahierten Kriterien als Tabelle zur Kontrolle und bestätige den Eintrag.
 
