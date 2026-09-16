@@ -59,6 +59,33 @@ const TOOL_DEFS = [
       required: ['link'],
     },
   },
+  {
+    name: 'journey.create_from_link',
+    description:
+      'Legt eine neue Buying Journey an und crawlt einen Initial-Link als erstes Produkt (z.B. ein Schrank-Link legt eine Schrank-Journey an). Legt nichts an, wenn der Slug existiert oder die Seite nicht lädt.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'Journey-Kürzel der neuen Journey, z.B. "schraenke"' },
+        link: { type: 'string', description: 'Initiale Produkt-URL (http/https), wird als erstes Item übernommen' },
+        maxChars: {
+          type: 'number',
+          description: 'Maximale Textlänge (Default 15000, Maximum 50000)',
+        },
+        name: { type: 'string', description: 'Produktname (Default: Seitentitel des Links)' },
+        price: { type: 'string', description: 'Preis als Freitext, z.B. "1499€"' },
+        rating: { type: 'number', description: 'Bewertung 0-5 (wird in ⭐-Format umgewandelt)', minimum: 0, maximum: 5 },
+        status: { type: 'string', description: 'Status des Eintrags', enum: ITEM_STATUSES },
+        notes: { type: 'string', description: 'Notizen zum Eintrag' },
+        specs: {
+          type: 'object',
+          description: 'Freie technische Vergleichskriterien, z.B. {"weight": "15.8 kg"}',
+          additionalProperties: { type: 'string' },
+        },
+      },
+      required: ['slug', 'link'],
+    },
+  },
 ];
 
 module.exports = { SERVER_INFO, PROTOCOL_VERSION, ITEM_STATUSES, TOOL_DEFS };

@@ -6,10 +6,8 @@ import {
   faEuroSign,
   faArrowUpRightFromSquare,
   faCodeCompare,
-  faCircleInfo,
   faPencil,
   faStar,
-  faNoteSticky,
   faTrashCan,
 } from '@fortawesome/free-solid-svg-icons'
 import {
@@ -28,6 +26,7 @@ import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableRow } from '@/components/ui/table'
 import { ImportLinkForm } from '@/components/ImportLinkForm'
 import { ProductDialog } from '@/components/ProductDialog'
+import { RatingDialog } from '@/components/RatingDialog'
 import { StarRatingDisplay } from '@/components/StarRating'
 import { useJourneyData } from '@/lib/journey-data-context'
 import { iconForSpecKey, parseSpecsString } from '@/lib/spec-icons'
@@ -43,8 +42,13 @@ interface Attribute {
 export function Compare() {
   const { data, mutate } = useJourneyData()
   const [dialog, setDialog] = useState<{ open: boolean; index: number | null }>({ open: false, index: null })
+  const [ratingDialog, setRatingDialog] = useState<{ open: boolean; index: number | null }>({
+    open: false,
+    index: null,
+  })
   const items = data.items
   const editingItem: JourneyItem | null = dialog.index !== null ? items[dialog.index] : null
+  const ratingItem: JourneyItem | null = ratingDialog.index !== null ? items[ratingDialog.index] : null
 
   function handleSaveProduct(item: JourneyItem) {
     mutate((prev) => {
@@ -54,6 +58,15 @@ export function Compare() {
       return { ...prev, items: next }
     }, dialog.index !== null ? 'Eintrag aktualisiert' : 'Neuer Eintrag hinzugefügt')
     setDialog({ open: false, index: null })
+  }
+
+  function handleSaveRating(item: JourneyItem) {
+    mutate((prev) => {
+      const next = [...prev.items]
+      if (ratingDialog.index !== null) next[ratingDialog.index] = item
+      return { ...prev, items: next }
+    }, 'Bewertung gespeichert')
+    setRatingDialog({ open: false, index: null })
   }
 
   function handleDeleteProduct(index: number) {
@@ -76,24 +89,27 @@ export function Compare() {
   const attributes: Attribute[] = [
     { label: 'Name', icon: faCompass, render: (item) => <span className="font-medium">{item.name}</span> },
     { label: 'Preis', icon: faEuroSign, render: (item) => <span className="font-mono text-celeste">{item.price || 'k.A.'}</span> },
-    { label: 'Rating', icon: faStar, render: (item) => <StarRatingDisplay rating={parseRating(item.rating)} /> },
     {
-      label: 'Status',
-      icon: faCircleInfo,
-      render: (item) => <Badge className={statusBadgeClass(item.status)}>{translateStatus(item.status)}</Badge>,
+      label: 'Bewertung & Status',
+      icon: faStar,
+      render: (item, index) => (
+        <button
+          type="button"
+          aria-label={`Bewertung für ${item.name} bearbeiten`}
+          title="Bewertung bearbeiten"
+          onClick={() => setRatingDialog({ open: true, index })}
+          className="flex w-full cursor-pointer flex-col items-start gap-1.5 rounded p-1 text-left transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <StarRatingDisplay rating={parseRating(item.rating)} />
+          <Badge className={statusBadgeClass(item.status)}>{translateStatus(item.status)}</Badge>
+        </button>
+      ),
     },
     ...specKeys.map((key) => ({
       label: key,
       icon: iconForSpecKey(key),
       render: (item: JourneyItem) => <span className="text-sm">{findSpecValue(item, key)}</span>,
     })),
-    {
-      label: 'Erfahrungen',
-      icon: faNoteSticky,
-      render: (item) => (
-        <p className="max-w-52 text-sm text-muted-foreground">{item.notes || 'Keine Notizen vorhanden.'}</p>
-      ),
-    },
   ]
 
   return (
@@ -193,6 +209,12 @@ export function Compare() {
         onOpenChange={(open) => setDialog((d) => ({ ...d, open }))}
         item={editingItem}
         onSubmit={handleSaveProduct}
+      />
+      <RatingDialog
+        open={ratingDialog.open}
+        onOpenChange={(open) => setRatingDialog((d) => ({ ...d, open }))}
+        item={ratingItem}
+        onSubmit={handleSaveRating}
       />
     </div>
   )

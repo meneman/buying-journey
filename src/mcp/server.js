@@ -3,6 +3,7 @@
 //
 // Ruft ausschließlich die REST-API des Backends auf (kein Direkt-DB-Zugriff):
 //   GET /api/journeys                  Existenzprüfung (verhindert stilles Anlegen)
+//   POST /api/journeys                 Journey explizit anlegen (201, 409 bei Duplikat)
 //   GET /api/data?journey=X            Status, Logs, Items, Specs, Notizen, Titel
 //   POST /api/data?journey=X           Vollständiges Dokument zurückschreiben
 //   GET /api/feedback?journey=X        Feedback-Text
@@ -13,9 +14,10 @@
 //
 // Protokoll: newline-delimited JSON-RPC 2.0 auf stdin/stdout (MCP-Transport),
 // Logs gehen nach stderr. Tools:
-//   `journey.get`        Dokument lesen (legt nichts an)
-//   `journey.add_item`   Produkt anlegen/aktualisieren (Upsert per Name)
-//   `journey.crawl_link` Produktseite headless laden (Titel + Text, speichert nichts)
+//   `journey.get`               Dokument lesen (legt nichts an)
+//   `journey.add_item`          Produkt anlegen/aktualisieren (Upsert per Name)
+//   `journey.crawl_link`        Produktseite headless laden (Titel + Text, speichert nichts)
+//   `journey.create_from_link`  Neue Journey anlegen + Initial-Link als erstes Produkt crawlen
 // Unbekannter/leerer Slug und unerreichbares Backend liefern definierte
 // Fehler, ohne etwas anzulegen oder zu schreiben.
 
@@ -113,22 +115,11 @@ function invalidParams(message) {
   return err;
 }
 
-// Prüft die Argumente von journey.add_item. Gibt normalisierte Werte zurück
-// (slug/name getrimmt, optionale Strings/Objekte nur wenn gesetzt).
-function validateAddItemArgs(raw) {
-  const args = (raw && raw.arguments) || {};
-  if (typeof args.slug !== 'string' || !args.slug.trim()) {
-    throw invalidParams('Parameter "slug" (nicht-leerer String) ist erforderlich.');
-  }
-  const slug = sanitizeSlug(args.slug);
-  if (!slug) {
-    throw invalidParams('Parameter "slug" ergibt kein gültiges Journey-Kürzel (erlaubt: a-z, 0-9, ., -).');
-  }
-  if (typeof args.name !== 'string' || !args.name.trim()) {
-    throw invalidParams('Parameter "name" (nicht-leerer String) ist erforderlich.');
-  }
-  const name = args.name.trim();
-  for (const key of ['price', 'notes', 'link']) {
+// Prüft die optionalen Item-Felder (Preis/Notizen/Rating/Status/Specs) —
+// gemeinsam genutzt von journey.add_item und journey.create_from_link, damit
+// beide Tools dieselben Regeln melden.
+function validateOptionalItemFields(args) {
+  for (const key of ['price', 'notes']) {
     if (args[key] !== undefined && typeof args[key] !== 'string') {
       throw invalidParams(`Parameter "${key}" muss ein String sein.`);
     }
@@ -156,7 +147,53 @@ function validateAddItemArgs(raw) {
       specs[k] = v;
     }
   }
-  return { slug, name, price: args.price, rating, status: args.status, notes: args.notes, link: args.link, specs };
+  return { price: args.price, rating, status: args.status, notes: args.notes, specs };
+}
+
+// Prüft die Argumente von journey.add_item. Gibt normalisierte Werte zurück
+// (slug/name getrimmt, optionale Strings/Objekte nur wenn gesetzt).
+function validateAddItemArgs(raw) {
+  const args = (raw && raw.arguments) || {};
+  if (typeof args.slug !== 'string' || !args.slug.trim()) {
+    throw invalidParams('Parameter "slug" (nicht-leerer String) ist erforderlich.');
+  }
+  const slug = sanitizeSlug(args.slug);
+  if (!slug) {
+    throw invalidParams('Parameter "slug" ergibt kein gültiges Journey-Kürzel (erlaubt: a-z, 0-9, ., -).');
+  }
+  if (typeof args.name !== 'string' || !args.name.trim()) {
+    throw invalidParams('Parameter "name" (nicht-leerer String) ist erforderlich.');
+  }
+  const name = args.name.trim();
+  if (args.link !== undefined && typeof args.link !== 'string') {
+    throw invalidParams('Parameter "link" muss ein String sein.');
+  }
+  const optional = validateOptionalItemFields(args);
+  return { slug, name, link: args.link, ...optional };
+}
+
+// Prüft die Argumente von journey.create_from_link: Slug + Link sind Pflicht,
+// der Produktname ist optional (Default: Seitentitel), alle weiteren
+// Item-Felder folgen denselben Regeln wie bei journey.add_item.
+function validateCreateFromLinkArgs(raw) {
+  const args = (raw && raw.arguments) || {};
+  if (typeof args.slug !== 'string' || !args.slug.trim()) {
+    throw invalidParams('Parameter "slug" (nicht-leerer String) ist erforderlich.');
+  }
+  const slug = sanitizeSlug(args.slug);
+  if (!slug) {
+    throw invalidParams('Parameter "slug" ergibt kein gültiges Journey-Kürzel (erlaubt: a-z, 0-9, ., -).');
+  }
+  const { link, maxChars } = validateCrawlArgs({ arguments: args });
+  let name;
+  if (args.name !== undefined) {
+    if (typeof args.name !== 'string' || !args.name.trim()) {
+      throw invalidParams('Parameter "name" muss ein nicht-leerer String sein.');
+    }
+    name = args.name.trim();
+  }
+  const optional = validateOptionalItemFields(args);
+  return { slug, link, maxChars, name, ...optional };
 }
 
 async function handleAddItem(params) {
@@ -327,11 +364,96 @@ async function assertKnownJourney(slug) {
   return journeys;
 }
 
+// Gegenstück für journey.create_from_link: der Slug darf noch NICHT
+// existieren (kein stilles Wiederverwenden, kein Überschreiben). Wirft mit
+// klarer Nachricht bei unerreichbarem Backend oder belegtem Slug.
+async function assertUnknownJourney(slug) {
+  let journeys;
+  try {
+    journeys = await getJson(`${BASE_URL}/api/journeys`);
+  } catch (err) {
+    throw new Error(`Backend unter ${BASE_URL} ist nicht erreichbar: ${err.message}`);
+  }
+  if (Array.isArray(journeys) && journeys.includes(slug)) {
+    throw new Error(
+      `Journey "${slug}" existiert bereits — nutze journey.add_item, um ein Produkt hinzuzufügen.`
+    );
+  }
+  return journeys;
+}
+
+// Legt eine neue Journey an und crawlt den Initial-Link als erstes Produkt.
+// Reihenfolge: erst crawlen, dann anlegen — schlägt der Crawl fehl, bleibt
+// nichts zurück. Das Item übernimmt handleAddItem (Upsert-Regeln, Header).
+async function handleCreateFromLink(params) {
+  const { slug, link, maxChars, name: givenName, price, rating, status, notes, specs } =
+    validateCreateFromLinkArgs(params);
+  await assertUnknownJourney(slug);
+  let crawled;
+  try {
+    crawled = await crawlPage(link);
+  } catch (err) {
+    throw new Error(`Seite konnte nicht geladen werden (${link}): ${err.message}`);
+  }
+  const truncated = crawled.text.length > maxChars;
+  const name = givenName || String(crawled.title || '').trim();
+  if (!name) {
+    return toolResultError(
+      'Seite lieferte keinen Titel — bitte Parameter "name" für das erste Produkt angeben.'
+    );
+  }
+  try {
+    await postJson(`${BASE_URL}/api/journeys`, { slug });
+  } catch (err) {
+    if (/HTTP 409/.test(err.message)) {
+      throw new Error(
+        `Journey "${slug}" existiert bereits — nutze journey.add_item, um ein Produkt hinzuzufügen.`
+      );
+    }
+    throw new Error(`Journey "${slug}" konnte nicht angelegt werden: ${err.message}`);
+  }
+  const itemArgs = { slug, name, link };
+  if (price !== undefined) itemArgs.price = price;
+  if (rating !== undefined) itemArgs.rating = rating;
+  if (status !== undefined) itemArgs.status = status;
+  if (notes !== undefined) itemArgs.notes = notes;
+  if (specs !== undefined) itemArgs.specs = specs;
+  const added = await handleAddItem({ name: 'journey.add_item', arguments: itemArgs });
+  const addedOut = JSON.parse(added.content[0].text);
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          {
+            success: true,
+            slug,
+            name,
+            created: true,
+            item: addedOut.item,
+            source: { url: link, title: crawled.title, truncated },
+          },
+          null,
+          2
+        ),
+      },
+    ],
+  };
+}
+
 function toolResultError(message) {
   return { content: [{ type: 'text', text: `Fehler: ${message}` }], isError: true };
 }
 
 async function handleCall(params) {
+  if (params && params.name === 'journey.create_from_link') {
+    try {
+      return await handleCreateFromLink(params);
+    } catch (err) {
+      if (err.code === -32602) throw err;
+      return toolResultError(err.message);
+    }
+  }
   if (params && params.name === 'journey.add_item') {
     try {
       return await handleAddItem(params);

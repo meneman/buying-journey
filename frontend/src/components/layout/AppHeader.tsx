@@ -44,10 +44,12 @@ export function AppHeader() {
     <header className="border-b border-border bg-card">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 px-4 py-1.5 sm:px-6">
         <div className="ml-auto flex items-center gap-2">
-          <div className="hidden items-center gap-1.5 rounded-full border border-border px-2.5 py-1 font-mono text-[11px] text-muted-foreground sm:flex">
-            <span className={cn('size-1.5 rounded-full', copy.dot)} />
-            {copy.label}
-          </div>
+          {status !== 'synced' && (
+            <div className="hidden items-center gap-1.5 rounded-full border border-border px-2.5 py-1 font-mono text-[11px] text-muted-foreground sm:flex">
+              <span className={cn('size-1.5 rounded-full', copy.dot)} />
+              {copy.label}
+            </div>
+          )}
           <Button variant="ghost" size="icon-sm" title="Daten neu laden" onClick={reload}>
             <FontAwesomeIcon icon={faArrowsRotate} className="size-4" />
           </Button>

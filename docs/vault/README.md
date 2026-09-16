@@ -20,7 +20,9 @@ Die App-Daten selbst liegen lokal in SQLite (`data/app.db`, siehe Haupt-README) 
 
 ## Struktur
 
-Aktuell gibt es nur diese Übersicht. Vorgeschlagene Struktur beim Wachsen:
+- `Architektur/` – Systemdokumentation: [[Architektur/Übersicht|Übersicht]], [[Architektur/Backend|Backend]] (SQLite-Datenstruktur, API, Auth), [[Architektur/Frontend|Frontend]] (Seiten, Komponenten, Datenfluss)
+
+Vorgeschlagene Struktur beim Wachsen:
 
 - `Entscheidungen/` – festgehaltene Kaufentscheidungen mit Datum und Begründung
 - `Modelle/` – eine Notiz pro Fahrrad-Modell (Specs, Link, Pro/Contra)

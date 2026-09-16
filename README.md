@@ -115,7 +115,7 @@ Der Prompt in `src/agent/prompts/product_extraction_prompt.md` beschreibt dieses
 
 ## 🤖 MCP-Server (Buying Journey in Muse)
 
-`npm run mcp` startet den stdio-MCP-Server (`src/mcp/server.js`, ohne Dependencies) mit den Tools `journey.get` (komplettes Dokument inkl. Config lesen, legt nichts an), `journey.add_item` (Produkt anlegen/aktualisieren per Upsert) und `journey.crawl_link` (Produktseite headless laden, speichert nichts). Voraussetzung: Das Backend läuft (`npm run dev:server`, Default `http://localhost:3000`, via `MCP_BASE_URL` konfigurierbar).
+`npm run mcp` startet den stdio-MCP-Server (`src/mcp/server.js`, ohne Dependencies) mit den Tools `journey.get` (komplettes Dokument inkl. Config lesen, legt nichts an), `journey.add_item` (Produkt anlegen/aktualisieren per Upsert), `journey.crawl_link` (Produktseite headless laden, speichert nichts) und `journey.create_from_link` (neue Journey anlegen + Initial-Link als erstes Produkt crawlen). Voraussetzung: Das Backend läuft (`npm run dev:server`, Default `http://localhost:3000`, via `MCP_BASE_URL` konfigurierbar).
 
 Einbindung in Muse Code: in `~/.config/muse/settings.json` unter `mcpServers` eintragen (wirkt ab dem nächsten Start):
 

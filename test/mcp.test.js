@@ -387,7 +387,7 @@ test('GET /api/mcp-status liefert Server-Info und Tool-Liste (für die /mcp-Seit
   assert.equal(body.protocolVersion, '2024-11-05');
   assert.deepEqual(
     body.tools.map((tool) => tool.name),
-    ['journey.get', 'journey.add_item', 'journey.crawl_link']
+    ['journey.get', 'journey.add_item', 'journey.crawl_link', 'journey.create_from_link']
   );
   for (const tool of body.tools) {
     assert.ok(tool.description && tool.description.length > 0, `${tool.name} ohne Beschreibung`);
@@ -426,4 +426,100 @@ test('GET /api/mcp-status spiegelt tools/list des MCP-Servers', async (t) => {
     assert.equal(mirrored.description, tool.description);
     assert.deepEqual(mirrored.inputSchema, tool.inputSchema);
   }
+});
+
+test('tools/list bietet journey.create_from_link an', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/list', {});
+  const tool = res.result.tools.find((x) => x.name === 'journey.create_from_link');
+  assert.ok(tool, 'journey.create_from_link fehlt in tools/list');
+  assert.deepEqual(tool.inputSchema.required, ['slug', 'link']);
+});
+
+test('journey.create_from_link legt Journey mit gecrawltem Erstprodukt an', async (t) => {
+  const base = await startBackend(t);
+  const pageUrl = await startStaticServer(t);
+  const before = await (await fetch(`${base}/api/journeys`)).json();
+  assert.ok(!before.includes('schraenke'));
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { slug: 'Schraenke', link: pageUrl },
+  });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  const out = JSON.parse(res.result.content[0].text);
+  assert.equal(out.success, true);
+  assert.equal(out.slug, 'schraenke');
+  assert.equal(out.created, true);
+  assert.equal(out.item.link, pageUrl);
+  assert.equal(out.item.name, 'MCP Testrad Pro');
+  const after = await (await fetch(`${base}/api/journeys`)).json();
+  assert.ok(after.includes('schraenke'), 'Journey wurde nicht angelegt');
+  const data = await (await fetch(`${base}/api/data?journey=schraenke`)).json();
+  assert.equal(data.items.length, 1);
+  assert.equal(data.items[0].link, pageUrl);
+});
+
+test('journey.create_from_link mit existierendem Slug legt nichts an', async (t) => {
+  const base = await startBackend(t);
+  const pageUrl = await startStaticServer(t);
+  const before = await (await fetch(`${base}/api/journeys`)).json();
+  const dataBefore = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { slug: 'bike', link: pageUrl },
+  });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /existiert bereits/);
+  const after = await (await fetch(`${base}/api/journeys`)).json();
+  assert.deepEqual(after, before);
+  const dataAfter = await (await fetch(`${base}/api/data?journey=bike`)).json();
+  assert.deepEqual(dataAfter.items, dataBefore.items);
+});
+
+test('journey.create_from_link ohne Slug oder mit ungültigem Link gibt Invalid-Params-Fehler', async (t) => {
+  const base = await startBackend(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const noSlug = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { link: 'http://127.0.0.1:9/produkt' },
+  });
+  assert.equal(noSlug.error.code, -32602);
+  const badLink = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { slug: 'neu', link: 'ftp://example.com/produkt' },
+  });
+  assert.equal(badLink.error.code, -32602);
+});
+
+test('journey.create_from_link auf unerreichbaren Link legt keine Journey an', async (t) => {
+  const base = await startBackend(t);
+  const before = await (await fetch(`${base}/api/journeys`)).json();
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { slug: 'geistermoebel', link: 'http://127.0.0.1:1/produkt' },
+  });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /konnte nicht geladen werden/);
+  const after = await (await fetch(`${base}/api/journeys`)).json();
+  assert.deepEqual(after, before);
+});
+
+test('journey.create_from_link bei unerreichbarem Backend gibt definierten Tool-Fehler', async (t) => {
+  const client = startMcp(t, 'http://127.0.0.1:1');
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { slug: 'neu', link: 'http://127.0.0.1:9/produkt' },
+  });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /nicht erreichbar/);
 });
