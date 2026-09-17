@@ -1,0 +1,1 @@
+{"description": "Produkt-Extraktion für den agy-Extraktor (--json-schema). Felder wie JourneyItem.", "properties": {"link": {"type": "string"}, "name": {"type": "string"}, "notes": {"type": "string"}, "price": {"type": "string"}, "rating": {"type": "number"}, "specs": {"type": "string"}, "status": {"type": "string"}}, "required": ["name"], "type": "object"}

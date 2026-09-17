@@ -1,0 +1,1 @@
+{"description": "Journey-Benennung für den agy-Extraktor (--json-schema). Antwort auf src/agent/prompts/journey_naming_prompt.md.", "properties": {"category": {"type": "string"}, "name": {"type": "string"}, "slug": {"type": "string"}}, "required": ["slug", "name"], "type": "object"}

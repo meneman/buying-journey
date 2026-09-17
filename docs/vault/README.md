@@ -1,6 +1,6 @@
 # Vault – Übersicht 🗂️
 
-Dieser Ordner (`docs/vault`) ist ein **Obsidian Vault** – der Wissens- und Notizbereich zum Projekt [VeloPath](../../README.md), dem Fahrradkauf-Begleiter.
+Dieser Ordner (`docs/vault`) ist ein **Obsidian Vault** – der Wissens- und Notizbereich zu [JourneyPath](../../README.md), dem KI-gestützten Kauf-Begleiter. (Das Repo-`README.md` trägt noch den Ursprungsnamen *VeloPath* – siehe [[Was-ist-JourneyPath]].)
 
 ## Öffnen in Obsidian
 
@@ -12,20 +12,23 @@ Dieser Ordner (`docs/vault`) ist ein **Obsidian Vault** – der Wissens- und Not
 
 ## Worum geht es hier?
 
-- **Fahrradkauf-Journey** dokumentieren: Modelle, Probefahrten, Händlergespräche, Entscheidungen
+Start: [[Was-ist-JourneyPath]] — Sinn des Projekts (KI-gestützter Kauf-Wrapper: URL rein, LLM füllt den Eintrag, MCP-Agent schreibt mit).
+
+- **Kaufreisen** dokumentieren: Kandidaten, Probefahrten, Händlergespräche, Entscheidungen
 - **Wissen sammeln:** Kaufkriterien, Specs, Links, Vor-/Nachteile
 - **Projektwissen** festhalten: alles, was nicht in den Code gehört
 
-Die App-Daten selbst liegen lokal in SQLite (`data/app.db`, siehe Haupt-README) – dieser Vault ist für Notizen, Recherche und Übersicht rundherum gedacht.
+Die App-Daten selbst liegen lokal in SQLite (`data/app.db`, siehe [[Architektur/Backend|Backend]]) – dieser Vault ist für Notizen, Recherche und Übersicht rundherum gedacht.
 
 ## Struktur
 
-- `Architektur/` – Systemdokumentation: [[Architektur/Übersicht|Übersicht]], [[Architektur/Backend|Backend]] (SQLite-Datenstruktur, API, Auth), [[Architektur/Frontend|Frontend]] (Seiten, Komponenten, Datenfluss)
+- [[Was-ist-JourneyPath]] – Sinn, KI-Wege in die App, Abgrenzung, typischer Ablauf
+- `Architektur/` – Systemdokumentation: [[Architektur/Übersicht|Übersicht]], [[Architektur/Backend|Backend]] (SQLite-Datenstruktur, API, Auth, Crawl-Pipeline, MCP), [[Architektur/Frontend|Frontend]] (Seiten, Komponenten, Datenfluss)
 
 Vorgeschlagene Struktur beim Wachsen:
 
 - `Entscheidungen/` – festgehaltene Kaufentscheidungen mit Datum und Begründung
-- `Modelle/` – eine Notiz pro Fahrrad-Modell (Specs, Link, Pro/Contra)
+- `Modelle/` – eine Notiz pro Kandidat (Specs, Link, Pro/Contra)
 - `Tagebuch/` – chronologische Notizen zu Probefahrten und Terminen
 - `Inbox/` – schneller Eingang für Links und Ideen, wird regelmäßig sortiert
 

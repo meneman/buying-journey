@@ -44,7 +44,7 @@ type Status = 'loading' | 'ok' | 'error'
 type ReadCheck = { state: 'idle' | 'running'; result: string | null }
 
 /**
- * MCP-Integration (read-only, app-weit ohne `?journey=`-Param wie `/login`):
+ * MCP-Integration (hinter dem `LoginGate`, app-weit ohne `?journey=`-Param):
  * Verbindungsstatus aus `GET /api/mcp-status`, kopierbares Setup-Snippet und
  * Kurzanleitung. Bleibt auch bei gestopptem Backend lesbar (dann ist nur der
  * Status rot). Der Status prüft nur die Backend-Erreichbarkeit — ob

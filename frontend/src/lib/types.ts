@@ -17,6 +17,8 @@ export interface JourneyItem {
   status?: string
   notes?: string
   link?: string
+  /** Gesetzt, wenn der Auto-Crawl blockiert war und der Inhalt manuell eingefügt werden muss. */
+  needsContent?: boolean
 }
 
 export interface JourneySpec {

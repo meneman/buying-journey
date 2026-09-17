@@ -60,6 +60,15 @@ export function Dashboard() {
     mutate((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }), `„${name}" gelöscht`)
   }
 
+  /** Manuell eingefügter Inhalt wurde per LLM ausgewertet — Flag ist damit erledigt. */
+  function handleImportContent(index: number, item: JourneyItem) {
+    mutate((prev) => {
+      const items = [...prev.items]
+      items[index] = item
+      return { ...prev, items }
+    }, 'Inhalt übernommen')
+  }
+
   function handleAddLogEntry(e: React.FormEvent) {
     e.preventDefault()
     const event = newEvent.trim()
@@ -134,6 +143,7 @@ export function Dashboard() {
                   item={item}
                   onEdit={() => setDialog({ open: true, index })}
                   onDelete={() => handleDeleteProduct(index)}
+                  onImportContent={(merged) => handleImportContent(index, merged)}
                 />
               ))}
             </div>

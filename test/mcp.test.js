@@ -121,13 +121,32 @@ function startMcp(t, baseUrl, token) {
   return { rpc, notify };
 }
 
+const LLM_STUB_PATH = path.join(__dirname, 'helpers', 'llm-stub.js');
+const LLM_ENV_KEYS = ['CRAWL_EXTRACT_PROVIDER', 'CRAWL_EXTRACT_CMD', 'N8N_WEBHOOK_URL'];
+
+/** Schaltet die Backend-KI auf den deterministischen Stub um (local-cmd). */
+function useLlmStub(t) {
+  const snap = Object.fromEntries(LLM_ENV_KEYS.map((k) => [k, process.env[k]]));
+  process.env.CRAWL_EXTRACT_PROVIDER = 'local-cmd';
+  process.env.CRAWL_EXTRACT_CMD = `node "${LLM_STUB_PATH}"`;
+  delete process.env.N8N_WEBHOOK_URL;
+  t.after(() => {
+    for (const k of LLM_ENV_KEYS) {
+      if (snap[k] === undefined) delete process.env[k];
+      else process.env[k] = snap[k];
+    }
+  });
+}
+
 const PRODUCT_HTML = `<!doctype html><html><head><title>MCP Testrad Pro</title></head><body><h1>MCP Testrad Pro</h1><p>Preis: 1299€</p><p>Rahmen: Aluminium, Gewicht: 14.2 kg</p></body></html>`;
 
+const TESLA_HTML = `<!doctype html><html><head><title>Tesla Model 3 Highland</title></head><body><h1>Tesla Model 3</h1><p>Preis: 42990€</p><p>Reichweite (WLTP): 513 km, Akku: 60 kWh, Leistung: 283 PS</p></body></html>`;
+
 /** Startet einen statischen HTTP-Server mit einer Produktseite für Crawl-Tests. */
-async function startStaticServer(t) {
+async function startStaticServer(t, html = PRODUCT_HTML) {
   const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(PRODUCT_HTML);
+    res.end(html);
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
@@ -486,10 +505,12 @@ test('tools/list bietet journey.create_from_link an', async (t) => {
   const res = await client.rpc('tools/list', {});
   const tool = res.result.tools.find((x) => x.name === 'journey.create_from_link');
   assert.ok(tool, 'journey.create_from_link fehlt in tools/list');
-  assert.deepEqual(tool.inputSchema.required, ['slug', 'link']);
+  assert.deepEqual(tool.inputSchema.required, ['link']);
+  assert.ok(tool.inputSchema.properties.slug, 'optionales "slug" fehlt im Schema');
 });
 
-test('journey.create_from_link legt Journey mit gecrawltem Erstprodukt an', async (t) => {
+test('journey.create_from_link legt Journey mit KI-extrahiertem Erstprodukt an', async (t) => {
+  useLlmStub(t);
   const base = await startBackend(t);
   const pageUrl = await startStaticServer(t);
   const before = await (await getAuthed(base, '/api/journeys')).json();
@@ -505,8 +526,12 @@ test('journey.create_from_link legt Journey mit gecrawltem Erstprodukt an', asyn
   assert.equal(out.success, true);
   assert.equal(out.slug, 'schraenke');
   assert.equal(out.created, true);
+  assert.equal(out.slugSource, 'explicit');
+  assert.equal(out.ai.extraction, 'local-cmd');
   assert.equal(out.item.link, pageUrl);
   assert.equal(out.item.name, 'MCP Testrad Pro');
+  assert.equal(out.item.price, '1299€');
+  assert.match(out.item.specs, /Rahmen: Aluminium/);
   const after = await (await getAuthed(base, '/api/journeys')).json();
   assert.ok(after.includes('schraenke'), 'Journey wurde nicht angelegt');
   const data = await (await getAuthed(base, '/api/data?journey=schraenke')).json();
@@ -534,15 +559,159 @@ test('journey.create_from_link mit existierendem Slug legt nichts an', async (t)
   assert.deepEqual(dataAfter.items, dataBefore.items);
 });
 
-test('journey.create_from_link ohne Slug oder mit ungültigem Link gibt Invalid-Params-Fehler', async (t) => {
+test('journey.create_from_link ohne Slug: KI benennt Journey und extrahiert Produkt', async (t) => {
+  useLlmStub(t);
+  const base = await startBackend(t);
+  const pageUrl = await startStaticServer(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { link: pageUrl },
+  });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  const out = JSON.parse(res.result.content[0].text);
+  assert.equal(out.success, true);
+  assert.equal(out.slug, 'bike');
+  assert.equal(out.slugSource, 'auto');
+  assert.equal(out.journeyName, 'Fahrrad');
+  assert.equal(out.ai.naming, 'local-cmd');
+  assert.equal(out.ai.extraction, 'local-cmd');
+  assert.equal(out.item.name, 'MCP Testrad Pro');
+  assert.equal(out.item.price, '1299€');
+  assert.match(out.item.specs, /Gewicht: 14\.2 kg/);
+  const after = await (await getAuthed(base, '/api/journeys')).json();
+  assert.ok(after.includes('bike'), 'Journey wurde nicht angelegt');
+});
+
+test('journey.create_from_link ohne Slug nennt eine Model-3-Seite "elektro-auto"', async (t) => {
+  useLlmStub(t);
+  const base = await startBackend(t);
+  const pageUrl = await startStaticServer(t, TESLA_HTML);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { link: pageUrl },
+  });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  const out = JSON.parse(res.result.content[0].text);
+  assert.equal(out.success, true);
+  assert.equal(out.slug, 'elektro-auto');
+  assert.equal(out.slugSource, 'auto');
+  assert.equal(out.journeyName, 'Elektro-Auto');
+  assert.equal(out.category, 'auto');
+  assert.equal(out.item.name, 'Tesla Model 3');
+  assert.equal(out.item.price, '42990€');
+  assert.match(out.item.specs, /Reichweite \(wltp\): 513 km/);
+  assert.equal(out.item.rating, '⭐⭐⭐⭐');
+  assert.equal(out.item.link, pageUrl);
+  const after = await (await getAuthed(base, '/api/journeys')).json();
+  assert.ok(after.includes('elektro-auto'), 'Journey wurde nicht angelegt');
+  const config = await (
+    await fetch(`${base}/api/journey-config?journey=elektro-auto`, {
+      headers: { Authorization: `Bearer ${testKey(base)}` },
+    })
+  ).json();
+  assert.equal(config.name, 'Elektro-Auto');
+  assert.equal(config.category, 'auto');
+  const data = await (await getAuthed(base, '/api/data?journey=elektro-auto')).json();
+  assert.equal(data.items.length, 1);
+  assert.equal(data.items[0].link, pageUrl);
+});
+
+test('journey.create_from_link mit explizitem Slug behält diesen bei', async (t) => {
+  useLlmStub(t);
+  const base = await startBackend(t);
+  const pageUrl = await startStaticServer(t, TESLA_HTML);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { slug: 'stromer', link: pageUrl },
+  });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  const out = JSON.parse(res.result.content[0].text);
+  assert.equal(out.slug, 'stromer');
+  assert.equal(out.slugSource, 'explicit');
+  assert.ok(!('journeyName' in out), 'expliziter Slug darf keinen Auto-Namen setzen');
+  assert.equal(out.ai.naming, null);
+  assert.equal(out.item.name, 'Tesla Model 3');
+});
+
+test('journey.create_from_link ohne Slug und ohne KI-Provider nutzt den Offline-Rückfall', async (t) => {
+  const base = await startBackend(t);
+  // Erst nach startBackend (setzt N8N_WEBHOOK_URL zurück). n8n kann nicht
+  // benennen → markierter Offline-Rückfall statt Fehler (deterministisch,
+  // auch mit agy-Binary im PATH).
+  const snap = Object.fromEntries(LLM_ENV_KEYS.map((k) => [k, process.env[k]]));
+  process.env.CRAWL_EXTRACT_PROVIDER = 'n8n';
+  process.env.N8N_WEBHOOK_URL = 'https://n8n.example/hook';
+  delete process.env.CRAWL_EXTRACT_CMD;
+  t.after(() => {
+    for (const k of LLM_ENV_KEYS) {
+      if (snap[k] === undefined) delete process.env[k];
+      else process.env[k] = snap[k];
+    }
+  });
+  const pageUrl = await startStaticServer(t, TESLA_HTML);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { link: pageUrl },
+  });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  const out = JSON.parse(res.result.content[0].text);
+  assert.equal(out.success, true);
+  assert.equal(out.slug, 'tesla-model-3');
+  assert.equal(out.slugSource, 'fallback');
+  assert.equal(out.journeyName, 'Tesla Model 3');
+  assert.equal(out.ai.naming, 'fallback');
+  assert.equal(out.ai.extraction, 'fallback');
+  assert.equal(out.item.name, 'Tesla Model 3 Highland');
+  assert.equal(out.item.link, pageUrl);
+  const after = await (await getAuthed(base, '/api/journeys')).json();
+  assert.ok(after.includes('tesla-model-3'), 'Journey wurde nicht angelegt');
+});
+
+test('journey.create_from_link mit Slug und ohne KI-Provider legt Offline-Produkt an', async (t) => {
+  const base = await startBackend(t);
+  const snap = Object.fromEntries(LLM_ENV_KEYS.map((k) => [k, process.env[k]]));
+  process.env.CRAWL_EXTRACT_PROVIDER = 'n8n';
+  process.env.N8N_WEBHOOK_URL = 'https://n8n.example/hook';
+  delete process.env.CRAWL_EXTRACT_CMD;
+  t.after(() => {
+    for (const k of LLM_ENV_KEYS) {
+      if (snap[k] === undefined) delete process.env[k];
+      else process.env[k] = snap[k];
+    }
+  });
+  const pageUrl = await startStaticServer(t);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { slug: 'offline-bike', link: pageUrl },
+  });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  const out = JSON.parse(res.result.content[0].text);
+  assert.equal(out.slug, 'offline-bike');
+  assert.equal(out.slugSource, 'explicit');
+  assert.equal(out.ai.extraction, 'fallback');
+  assert.equal(out.item.name, 'MCP Testrad Pro');
+  assert.equal(out.item.link, pageUrl);
+});
+
+test('journey.create_from_link mit leerem Slug oder ungültigem Link gibt Invalid-Params-Fehler', async (t) => {
   const base = await startBackend(t);
   const client = startMcp(t, base);
   await handshake(client);
-  const noSlug = await client.rpc('tools/call', {
+  const emptySlug = await client.rpc('tools/call', {
     name: 'journey.create_from_link',
-    arguments: { link: 'http://127.0.0.1:9/produkt' },
+    arguments: { slug: '   ', link: 'http://127.0.0.1:9/produkt' },
   });
-  assert.equal(noSlug.error.code, -32602);
+  assert.equal(emptySlug.error.code, -32602);
   const badLink = await client.rpc('tools/call', {
     name: 'journey.create_from_link',
     arguments: { slug: 'neu', link: 'ftp://example.com/produkt' },

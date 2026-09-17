@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faArrowUpRightFromSquare, faPencil, faTrashCan } from '@fortawesome/free-solid-svg-icons'
+import { faArrowUpRightFromSquare, faPaste, faPencil, faTrashCan } from '@fortawesome/free-solid-svg-icons'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -13,7 +14,9 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ManualContentDialog } from '@/components/ManualContentDialog'
 import { StarRatingDisplay } from '@/components/StarRating'
+import { mergeParsedContent } from '@/lib/manual-content'
 import { parseSpecsString, iconForSpecKey } from '@/lib/spec-icons'
 import { statusBadgeClass } from '@/lib/status-style'
 import { parseRating, translateStatus, type JourneyItem } from '@/lib/types'
@@ -23,10 +26,13 @@ interface ProductCardProps {
   item: JourneyItem
   onEdit: () => void
   onDelete: () => void
+  onImportContent?: (item: JourneyItem) => void
 }
 
-export function ProductCard({ item, onEdit, onDelete }: ProductCardProps) {
+export function ProductCard({ item, onEdit, onDelete, onImportContent }: ProductCardProps) {
   const specs = parseSpecsString(item.specs)
+  const [pasteOpen, setPasteOpen] = useState(false)
+  const showPaste = Boolean(item.needsContent && onImportContent)
 
   return (
     <div className="flex flex-col rounded-xl border border-border bg-card">
@@ -59,6 +65,18 @@ export function ProductCard({ item, onEdit, onDelete }: ProductCardProps) {
         )}
 
         <p className="line-clamp-3 text-sm text-muted-foreground">{item.notes || 'Keine Notizen vorhanden.'}</p>
+
+        {showPaste && (
+          <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/40 p-3">
+            <p className="text-xs text-muted-foreground">
+              Automatischer Import blockiert — Seiteninhalt manuell einfügen.
+            </p>
+            <Button variant="outline" size="sm" className="self-start" onClick={() => setPasteOpen(true)}>
+              <FontAwesomeIcon icon={faPaste} className="size-3.5" />
+              Inhalt einfügen
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-between gap-2 border-t border-border p-3">
@@ -99,6 +117,15 @@ export function ProductCard({ item, onEdit, onDelete }: ProductCardProps) {
           </AlertDialog>
         </div>
       </div>
+      {showPaste && (
+        <ManualContentDialog
+          open={pasteOpen}
+          onOpenChange={setPasteOpen}
+          itemName={item.name}
+          link={item.link}
+          onParsed={(parsed) => onImportContent?.(mergeParsedContent(item, parsed))}
+        />
+      )}
     </div>
   )
 }

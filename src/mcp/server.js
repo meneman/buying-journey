@@ -21,6 +21,8 @@
 //   `journey.add_item`          Produkt anlegen/aktualisieren (Upsert per Name)
 //   `journey.crawl_link`        Produktseite headless laden (Titel + Text, speichert nichts)
 //   `journey.create_from_link`  Neue Journey anlegen + Initial-Link als erstes Produkt crawlen
+//                               (Slug optional — sonst LLM-Benennung; Erstprodukt per
+//                               LLM-Extraktion, offline Titel + Link als markierter Rückfall)
 // Unbekannter/leerer Slug und unerreichbares Backend liefern definierte
 // Fehler, ohne etwas anzulegen oder zu schreiben.
 
@@ -199,17 +201,43 @@ function validateAddItemArgs(raw) {
   return { slug, name, link: args.link, ...optional };
 }
 
-// Prüft die Argumente von journey.create_from_link: Slug + Link sind Pflicht,
-// der Produktname ist optional (Default: Seitentitel), alle weiteren
-// Item-Felder folgen denselben Regeln wie bei journey.add_item.
+// Zählt die ⭐-Bewertung aus POST /api/parse-text zurück auf 0-5.
+function countStars(rating) {
+  return (String(rating || '').match(/⭐/g) || []).length;
+}
+
+// Wandelt den "<br>"-Specs-String aus POST /api/parse-text in das
+// Specs-Objekt von journey.add_item um (leere Schlüssel fallen raus).
+function specsStringToObject(specs) {
+  const out = {};
+  if (!specs) return out;
+  for (const part of String(specs).split(/<br\s*\/?>/i)) {
+    const trim = part.trim();
+    if (!trim) continue;
+    const colon = trim.indexOf(':');
+    if (colon <= 0) continue;
+    const key = trim.slice(0, colon).trim().toLowerCase();
+    const value = trim.slice(colon + 1).trim();
+    if (key && value) out[key] = value;
+  }
+  return out;
+}
+
+// Prüft die Argumente von journey.create_from_link: nur der Link ist Pflicht,
+// der Slug ist optional (Default: KI-Benennung per POST /api/suggest-journey).
+// Explizit übergebene Item-Felder überschreiben die KI-Extraktion
+// (POST /api/parse-text), alle Felder folgen den Regeln von journey.add_item.
 function validateCreateFromLinkArgs(raw) {
   const args = (raw && raw.arguments) || {};
-  if (typeof args.slug !== 'string' || !args.slug.trim()) {
-    throw invalidParams('Parameter "slug" (nicht-leerer String) ist erforderlich.');
-  }
-  const slug = sanitizeSlug(args.slug);
-  if (!slug) {
-    throw invalidParams('Parameter "slug" ergibt kein gültiges Journey-Kürzel (erlaubt: a-z, 0-9, ., -).');
+  let slug;
+  if (args.slug !== undefined) {
+    if (typeof args.slug !== 'string' || !args.slug.trim()) {
+      throw invalidParams('Parameter "slug" muss ein nicht-leerer String sein.');
+    }
+    slug = sanitizeSlug(args.slug);
+    if (!slug) {
+      throw invalidParams('Parameter "slug" ergibt kein gültiges Journey-Kürzel (erlaubt: a-z, 0-9, ., -).');
+    }
   }
   const { link, maxChars } = validateCrawlArgs({ arguments: args });
   let name;
@@ -410,12 +438,22 @@ async function assertUnknownJourney(slug) {
 }
 
 // Legt eine neue Journey an und crawlt den Initial-Link als erstes Produkt.
-// Reihenfolge: erst crawlen, dann anlegen — schlägt der Crawl fehl, bleibt
-// nichts zurück. Das Item übernimmt handleAddItem (Upsert-Regeln, Header).
+// Alles KI-gesteuert: Ohne expliziten Slug kommt der Journey-Name aus der
+// LLM-Benennung (POST /api/suggest-journey nach
+// src/agent/prompts/journey_naming_prompt.md), das Erstprodukt aus der
+// LLM-Extraktion (POST /api/parse-text nach
+// src/agent/prompts/product_extraction_prompt.md). Explizit übergebene
+// Felder überschreiben die Extraktion. Reihenfolge: erst crawlen, dann
+// anlegen — schlägt der Crawl fehl, bleibt nichts zurück. Ohne KI-Provider
+// (agy, remote-ai oder local-cmd) gibt es statt eines Fehlers einen ehrlich
+// markierten Offline-Rückfall (Titel + Link, `ai: "fallback"`). Das Item
+// übernimmt handleAddItem (Upsert-Regeln, Header).
 async function handleCreateFromLink(params) {
-  const { slug, link, maxChars, name: givenName, price, rating, status, notes, specs } =
+  const { slug: givenSlug, link, maxChars, name: givenName, price, rating, status, notes, specs } =
     validateCreateFromLinkArgs(params);
-  await assertUnknownJourney(slug);
+  if (givenSlug) {
+    await assertUnknownJourney(givenSlug);
+  }
   let crawled;
   try {
     crawled = await crawlPage(link);
@@ -423,14 +461,66 @@ async function handleCreateFromLink(params) {
     throw new Error(`Seite konnte nicht geladen werden (${link}): ${err.message}`);
   }
   const truncated = crawled.text.length > maxChars;
-  const name = givenName || String(crawled.title || '').trim();
+  const content = {
+    title: String(crawled.title || ''),
+    text: crawled.text.slice(0, maxChars),
+  };
+  let slug = givenSlug;
+  let journeyName;
+  let category;
+  let slugSource = 'explicit';
+  let namingProvider = null;
+  if (!slug) {
+    let suggested;
+    try {
+      suggested = await postJson(`${BASE_URL}/api/suggest-journey`, { url: link, ...content });
+    } catch (err) {
+      if (/nicht erreichbar|MCP_AUTH_TOKEN|Anmeldung fehlgeschlagen/.test(err.message)) throw err;
+      throw new Error(`KI-Benennung der Journey ist fehlgeschlagen (${link}): ${err.message}`);
+    }
+    slug = sanitizeSlug(suggested.slug);
+    if (!slug) {
+      throw new Error('Benennung der Journey lieferte kein gültiges Journey-Kürzel.');
+    }
+    journeyName = suggested.name;
+    category = suggested.category;
+    namingProvider = suggested.provider || null;
+    slugSource = namingProvider === 'fallback' ? 'fallback' : 'auto';
+    await assertUnknownJourney(slug);
+  }
+  // Ohne KI-Provider (Benennung per Offline-Rückfall) keine Extraktion
+  // versuchen — das Erstprodukt besteht dann nur aus Titel und Link.
+  const offline = !givenSlug && namingProvider === 'fallback';
+  let extracted = {};
+  let extractProvider = offline ? 'fallback' : null;
+  if (!offline) {
+    try {
+      const parsed = await postJson(`${BASE_URL}/api/parse-text`, { text: content.text, link });
+      extracted = (parsed && parsed.item) || {};
+      extractProvider = (parsed && parsed.provider) || null;
+    } catch (err) {
+      if (/NO_EXTRACTOR/.test(err.message)) {
+        // Kein KI-Provider (aber Backend erreichbar): Offline-Erstprodukt
+        // aus Titel und Link statt Fehler. Echte Fehler (Auth, Crawl-Block,
+        // unerreichbares Backend) fallen unten durch und werfen.
+        extracted = {};
+        extractProvider = 'fallback';
+      } else {
+        throw new Error(`KI-Extraktion des Produkts ist fehlgeschlagen (${link}): ${err.message}`);
+      }
+    }
+  }
+  const name = givenName || String(extracted.name || '').trim() || content.title.trim();
   if (!name) {
     return toolResultError(
       'Seite lieferte keinen Titel — bitte Parameter "name" für das erste Produkt angeben.'
     );
   }
   try {
-    await postJson(`${BASE_URL}/api/journeys`, { slug });
+    const body = { slug };
+    if (journeyName) body.name = journeyName;
+    if (category) body.category = category;
+    await postJson(`${BASE_URL}/api/journeys`, body);
   } catch (err) {
     if (/HTTP 409/.test(err.message)) {
       throw new Error(
@@ -440,11 +530,34 @@ async function handleCreateFromLink(params) {
     throw new Error(`Journey "${slug}" konnte nicht angelegt werden: ${err.message}`);
   }
   const itemArgs = { slug, name, link };
-  if (price !== undefined) itemArgs.price = price;
-  if (rating !== undefined) itemArgs.rating = rating;
-  if (status !== undefined) itemArgs.status = status;
-  if (notes !== undefined) itemArgs.notes = notes;
-  if (specs !== undefined) itemArgs.specs = specs;
+  if (price !== undefined) {
+    itemArgs.price = price;
+  } else if (extracted.price) {
+    itemArgs.price = extracted.price;
+  }
+  if (rating !== undefined) {
+    itemArgs.rating = rating;
+  } else if (countStars(extracted.rating) > 0) {
+    itemArgs.rating = countStars(extracted.rating);
+  }
+  if (status !== undefined) {
+    itemArgs.status = status;
+  } else if (ITEM_STATUSES.includes(extracted.status)) {
+    itemArgs.status = extracted.status;
+  }
+  if (notes !== undefined) {
+    itemArgs.notes = notes;
+  } else if (extracted.notes) {
+    itemArgs.notes = extracted.notes;
+  }
+  if (specs !== undefined) {
+    itemArgs.specs = specs;
+  } else {
+    const extractedSpecs = specsStringToObject(extracted.specs);
+    if (Object.keys(extractedSpecs).length > 0) {
+      itemArgs.specs = extractedSpecs;
+    }
+  }
   const added = await handleAddItem({ name: 'journey.add_item', arguments: itemArgs });
   const addedOut = JSON.parse(added.content[0].text);
   return {
@@ -458,6 +571,10 @@ async function handleCreateFromLink(params) {
             name,
             created: true,
             item: addedOut.item,
+            ...(journeyName ? { journeyName } : {}),
+            ...(category ? { category } : {}),
+            slugSource,
+            ai: { naming: namingProvider, extraction: extractProvider },
             source: { url: link, title: crawled.title, truncated },
           },
           null,

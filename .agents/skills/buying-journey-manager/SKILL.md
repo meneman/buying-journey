@@ -93,6 +93,7 @@ Das Skript lädt die Seite headless über Puppeteer und speichert das Ergebnis i
 1. **Journey klären**: Prüfe, ob die Ziel-Kaufreise klar ist.
    * Lade die Liste der verfügbaren Reisen über die API (`GET /api/journeys`).
    * Wenn unklar (z.B. mehrere Reisen passen oder es ist eine neue Kategorie), frage den User, ob er ein existierendes Journey (z.B. `bike`, `laptop`, `ev`) erweitern oder ein neues Journey (z.B. `smartphone`) anlegen möchte.
+   * Für eine neue Kategorie: Schlage nach dem Crawl einen Journey-Namen per `src/agent/prompts/journey_naming_prompt.md` vor (Produkt verallgemeinern, z.B. Model 3 → "Elektro-Auto") und lass ihn vom User bestätigen. Per MCP geht das automatisch (`journey.create_from_link` ohne `slug`, Benennung via `POST /api/suggest-journey`).
 2. **Crawl ausführen**: Führe das Skript `src/agent/scripts/crawl-and-extract.js` per `run_command` mit der URL aus.
 3. **Daten extrahieren**: Lies die Ergebnisdatei `src/agent/temp/last-crawl.json` mit `view_file` aus.
 4. **LLM-Verarbeitung**:

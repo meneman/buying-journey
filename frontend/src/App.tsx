@@ -1,9 +1,9 @@
-import { useEffect } from 'react'
 import { ThemeProvider } from 'next-themes'
 import { AppShell } from '@/components/layout/AppShell'
+import { LoginGate } from '@/components/LoginGate'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { AuthProvider, useLoggedIn } from '@/lib/auth-context'
+import { AuthProvider } from '@/lib/auth-context'
 import { JourneyDataProvider } from '@/lib/journey-data-context'
 import { PageSyncProvider } from '@/lib/page-sync-context'
 import { RouterProvider, useJourney, useRouter } from '@/lib/router'
@@ -17,42 +17,13 @@ import { Settings } from '@/pages/Settings'
 import { Specs } from '@/pages/Specs'
 
 function Routes() {
-  const { pathname, search, navigate } = useRouter()
+  const { pathname, search } = useRouter()
   const journey = useJourney()
-  const { loggedIn, loading } = useLoggedIn()
 
-  // Ausgeloggt sind nur die Übersicht (`/` ohne `?journey=`), `/login` und die
-  // MCP-Setup-Seite (`/mcp`, app-weit ohne `?journey=`) erlaubt — die Anleitung
-  // bleibt auch ohne Login lesbar.
-  const allowedLoggedOut =
-    pathname === '/login' || pathname === '/mcp' || (pathname === '/' && !search.get('journey'))
-
-  useEffect(() => {
-    if (!loading && !loggedIn && !allowedLoggedOut) navigate('/')
-  }, [loading, loggedIn, allowedLoggedOut, navigate])
-
+  // Öffentlich ohne Login: `/login` sowie die Übersicht (`/` ohne
+  // `?journey=` — die zeigt ausgeloggt allgemeine Infos mit Login-CTA).
   if (pathname === '/login') {
     return <Login />
-  }
-
-  if (loading) {
-    return <p className="py-16 text-center text-sm text-muted-foreground">Lädt…</p>
-  }
-
-  if (!loggedIn && !allowedLoggedOut) {
-    return null
-  }
-
-  if (pathname === '/mcp') {
-    return <Mcp />
-  }
-
-  if (pathname === '/feedback') {
-    return <Feedback />
-  }
-
-  if (pathname === '/einstellungen') {
-    return <Settings />
   }
 
   // `/` ohne `?journey=`-Param ist die Übersicht, mit Param das Detail-Dashboard.
@@ -60,10 +31,28 @@ function Routes() {
     return <JourneysOverview />
   }
 
+  // Alles andere braucht einen Login — das Gate leitet ausgeloggt direkt auf
+  // `/login` weiter (der MCP-Button im Header bleibt dabei immer sichtbar).
   return (
-    <JourneyDataProvider journey={journey} key={journey}>
-      {pathname === '/vergleich' ? <Compare /> : pathname === '/eigenschaften' ? <Specs /> : <Dashboard />}
-    </JourneyDataProvider>
+    <LoginGate>
+      {pathname === '/mcp' ? (
+        <Mcp />
+      ) : pathname === '/feedback' ? (
+        <Feedback />
+      ) : pathname === '/einstellungen' ? (
+        <Settings />
+      ) : (
+        <JourneyDataProvider journey={journey} key={journey}>
+          {pathname === '/vergleich' ? (
+            <Compare />
+          ) : pathname === '/eigenschaften' ? (
+            <Specs />
+          ) : (
+            <Dashboard />
+          )}
+        </JourneyDataProvider>
+      )}
+    </LoginGate>
   )
 }
 

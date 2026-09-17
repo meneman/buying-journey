@@ -62,11 +62,11 @@ const TOOL_DEFS = [
   {
     name: 'journey.create_from_link',
     description:
-      'Legt eine neue Buying Journey an und crawlt einen Initial-Link als erstes Produkt (z.B. ein Schrank-Link legt eine Schrank-Journey an). Legt nichts an, wenn der Slug existiert oder die Seite nicht lädt.',
+      'Legt eine neue Buying Journey an und crawlt einen Initial-Link als erstes Produkt — mit KI-Provider (agy, remote-ai oder local-cmd) voll KI-gesteuert: Ohne "slug" kommt der Journey-Name aus der LLM-Benennung (z.B. ein Model-3-Link legt eine "elektro-auto"-Journey an, siehe src/agent/prompts/journey_naming_prompt.md), das Erstprodukt (Name, Preis, Specs, Notizen) aus der LLM-Extraktion. Ohne KI-Provider gibt es statt eines Fehlers einen markierten Offline-Rückfall (Titel + Link). Explizit übergebene Felder überschreiben die Extraktion. Legt nichts an, wenn der Slug existiert oder die Seite nicht lädt.',
     inputSchema: {
       type: 'object',
       properties: {
-        slug: { type: 'string', description: 'Journey-Kürzel der neuen Journey, z.B. "schraenke"' },
+        slug: { type: 'string', description: 'Journey-Kürzel der neuen Journey, z.B. "schraenke". Optional: wird sonst aus dem Produkt verallgemeinert.' },
         link: { type: 'string', description: 'Initiale Produkt-URL (http/https), wird als erstes Item übernommen' },
         maxChars: {
           type: 'number',
@@ -83,7 +83,7 @@ const TOOL_DEFS = [
           additionalProperties: { type: 'string' },
         },
       },
-      required: ['slug', 'link'],
+      required: ['link'],
     },
   },
 ];

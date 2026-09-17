@@ -6,6 +6,7 @@ import {
   faEuroSign,
   faArrowUpRightFromSquare,
   faCodeCompare,
+  faPaste,
   faPencil,
   faStar,
   faTrashCan,
@@ -25,10 +26,12 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableRow } from '@/components/ui/table'
 import { ImportLinkForm } from '@/components/ImportLinkForm'
+import { ManualContentDialog } from '@/components/ManualContentDialog'
 import { ProductDialog } from '@/components/ProductDialog'
 import { RatingDialog } from '@/components/RatingDialog'
 import { StarRatingDisplay } from '@/components/StarRating'
 import { useJourneyData } from '@/lib/journey-data-context'
+import { mergeParsedContent } from '@/lib/manual-content'
 import { iconForSpecKey, parseSpecsString } from '@/lib/spec-icons'
 import { statusBadgeClass } from '@/lib/status-style'
 import { parseRating, translateStatus, type JourneyItem } from '@/lib/types'
@@ -46,9 +49,11 @@ export function Compare() {
     open: false,
     index: null,
   })
+  const [paste, setPaste] = useState<{ open: boolean; index: number | null }>({ open: false, index: null })
   const items = data.items
   const editingItem: JourneyItem | null = dialog.index !== null ? items[dialog.index] : null
   const ratingItem: JourneyItem | null = ratingDialog.index !== null ? items[ratingDialog.index] : null
+  const pasteItem: JourneyItem | null = paste.index !== null ? (items[paste.index] ?? null) : null
 
   function handleSaveProduct(item: JourneyItem) {
     mutate((prev) => {
@@ -72,6 +77,15 @@ export function Compare() {
   function handleDeleteProduct(index: number) {
     const name = items[index].name
     mutate((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }), `„${name}" gelöscht`)
+  }
+
+  /** Manuell eingefügter Inhalt wurde per LLM ausgewertet — Flag ist damit erledigt. */
+  function handleImportContent(index: number, item: JourneyItem) {
+    mutate((prev) => {
+      const next = [...prev.items]
+      next[index] = item
+      return { ...prev, items: next }
+    }, 'Inhalt übernommen')
   }
 
   const specKeys: string[] = []
@@ -139,7 +153,7 @@ export function Compare() {
         <div className="rounded-xl border border-border">
           <Table>
             <TableBody>
-              {attributes.map((attr) => (
+              {attributes.map((attr, row) => (
                 <TableRow key={attr.label}>
                   <TableCell className="sticky left-0 z-10 w-40 min-w-40 whitespace-nowrap bg-muted/60 align-top font-medium">
                     <div className="flex items-center gap-1.5 text-muted-foreground">
@@ -148,8 +162,27 @@ export function Compare() {
                     </div>
                   </TableCell>
                   {items.map((item, index) => (
-                    <TableCell key={index} className="min-w-48 align-top whitespace-normal">
-                      {attr.render(item, index)}
+                    <TableCell key={index} className="relative min-w-48 align-top whitespace-normal">
+                      <div
+                        aria-hidden={item.needsContent}
+                        className={item.needsContent ? 'pointer-events-none opacity-40 select-none' : undefined}
+                      >
+                        {attr.render(item, index)}
+                      </div>
+                      {item.needsContent &&
+                        (row === 0 ? (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-card/80 p-3 text-center">
+                            <p className="text-xs text-muted-foreground">
+                              Automatischer Import blockiert — Seiteninhalt manuell einfügen.
+                            </p>
+                            <Button variant="outline" size="sm" onClick={() => setPaste({ open: true, index })}>
+                              <FontAwesomeIcon icon={faPaste} className="size-3.5" />
+                              Inhalt einfügen
+                            </Button>
+                          </div>
+                        ) : (
+                          <div aria-hidden className="absolute inset-0 bg-card/60" />
+                        ))}
                     </TableCell>
                   ))}
                 </TableRow>
@@ -216,6 +249,17 @@ export function Compare() {
         item={ratingItem}
         onSubmit={handleSaveRating}
       />
+      {pasteItem && (
+        <ManualContentDialog
+          open={paste.open}
+          onOpenChange={(open) => setPaste((p) => ({ ...p, open }))}
+          itemName={pasteItem.name}
+          link={pasteItem.link}
+          onParsed={(parsed) => {
+            if (paste.index !== null) handleImportContent(paste.index, mergeParsedContent(pasteItem, parsed))
+          }}
+        />
+      )}
     </div>
   )
 }

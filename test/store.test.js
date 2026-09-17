@@ -172,3 +172,23 @@ test('feedback round-trips with a sensible default', async (t) => {
   store.saveFeedback('bike', 'anna', 'Eigene Notizen');
   assert.equal(store.getFeedback('bike', 'anna'), 'Eigene Notizen');
 });
+
+test('needsContent-Flag übersteht den Save/Get-Roundtrip (gesetzt und ungesetzt)', async (t) => {
+  const store = memDb(t);
+  store.saveJourneyData('bike', 'anna', {
+    status: {}, journey: [], specs: [], generalNotes: '',
+    items: [
+      { name: 'Blockiert-Auto', link: 'https://example.com/auto', needsContent: true },
+      { name: 'Normal-Bike', link: 'https://example.com/bike' },
+    ],
+  });
+  const items = store.getJourneyData('bike', 'anna').items;
+  assert.equal(items[0].needsContent, true);
+  assert.ok(!('needsContent' in items[1]), 'ungesetztes Flag darf nicht im Drahtformat auftauchen');
+  // Flag lässt sich durch erneutes Speichern ohne Flag wieder löschen.
+  store.saveJourneyData('bike', 'anna', {
+    status: {}, journey: [], specs: [], generalNotes: '',
+    items: [{ name: 'Blockiert-Auto', link: 'https://example.com/auto' }],
+  });
+  assert.ok(!('needsContent' in store.getJourneyData('bike', 'anna').items[0]));
+});

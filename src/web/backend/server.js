@@ -3,14 +3,13 @@ const dotenv = require('dotenv');
 const path = require('path');
 const { openDatabase } = require('../../db/store.js');
 const { optionalAuth, requireUser } = require('./auth.js');
-const { starsFromRating, specsToString } = require('../../core/item-format.js');
+const { crawlProduct, listProviders, parseProductText, suggestJourneyCategory, toJourneyItem } = require('./crawl-providers.js');
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 const FRONTEND_DIST = process.env.FRONTEND_DIST || path.join(__dirname, '../../../frontend/dist');
 
 // SQLite storage (file from DB_PATH, default ./data/app.db). No network, no sync.
@@ -331,70 +330,107 @@ app.post('/api/data', needUser, (req, res) => {
   }
 });
 
-// Sends a product URL to the n8n crawler and returns the extracted item
+// Verfügbare Crawl-Provider mit Konfigurationsstatus (für das
+// Provider-Dropdown im Frontend). Öffentlich lesbar wie `/api/config`? Nein:
+// bewusst hinter `needUser`, weil die Namen konfigurierter interner
+// Endpunkte sonst ausgeloggt sichtbar wären.
+app.get('/api/crawl-providers', needUser, (req, res) => {
+  try {
+    res.json(listProviders());
+  } catch (error) {
+    console.error('API Crawl-Providers Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Crawlt eine Produkt-URL in zwei Stufen (Inhalt parsen, dann mit LLM
+// auswerten; siehe `src/web/backend/crawl-providers.js`) und gibt das Item
+// zurück. `{ provider }` wählt die LLM-Auswertung (Default "n8n", bisher
+// N8N_WEBHOOK_URL), `{ fetcher }` das Parse-Tool (Default "direct").
+// Speichert nichts selbst — das Frontend persistiert direkt, ohne Kontrolle.
 app.post('/api/import-link', needUser, async (req, res) => {
   const journey = getJourney(req);
-  const { link } = req.body || {};
-
-  if (!link || typeof link !== 'string') {
-    return res.status(400).json({ error: 'Feld "link" ist erforderlich.' });
-  }
-  let parsedLink;
-  try {
-    parsedLink = new URL(link);
-  } catch {
-    return res.status(400).json({ error: 'Ungültige URL.' });
-  }
-  if (parsedLink.protocol !== 'http:' && parsedLink.protocol !== 'https:') {
-    return res.status(400).json({ error: 'Nur http(s)-URLs werden unterstützt.' });
-  }
-  if (!N8N_WEBHOOK_URL) {
-    return res.status(500).json({ error: 'N8N_WEBHOOK_URL ist nicht konfiguriert.' });
-  }
+  const { link, provider, fetcher } = req.body || {};
 
   try {
-    const n8nResponse = await fetch(N8N_WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: link, journey }),
-      signal: AbortSignal.timeout(60000),
-    });
-
-    const rawBody = await n8nResponse.text();
-    if (!n8nResponse.ok) {
-      return res.status(502).json({ error: `n8n-Fehler (${n8nResponse.status}): ${rawBody.slice(0, 300)}` });
-    }
-
-    let payload;
-    try {
-      payload = JSON.parse(rawBody);
-    } catch {
-      return res.status(502).json({ error: 'n8n hat keine gültige JSON-Antwort geliefert.' });
-    }
-    // n8n webhook responses are sometimes wrapped in an array
-    const productData = Array.isArray(payload) ? payload[0] : payload;
-
-    if (!productData || !productData.name) {
-      return res.status(502).json({ error: 'n8n hat kein verwertbares Produkt zurückgegeben.' });
-    }
-
-    const item = {
-      name: productData.name,
-      price: productData.price || '',
-      specs: specsToString(productData.specs),
-      rating: starsFromRating(productData.rating),
-      status: productData.status || 'Thinking',
-      notes: productData.notes || '',
-      link: productData.link || link,
-    };
-
-    res.json({ item });
+    const { raw, provider: used, fetcher: fetchUsed, meta } = await crawlProduct({ url: link, journey, provider, fetcher });
+    const item = toJourneyItem(raw, link);
+    console.log(
+      `[import-link] journey=${journey} item=${JSON.stringify(item.name)} provider=${used} fetcher=${fetchUsed || 'kombiniert'}` +
+      `${meta && meta.fallbackFrom ? ` fallback=${meta.fallbackFrom}->${fetchUsed}` : ''}` +
+      ` fetchMs=${meta ? meta.fetchMs : '?'} extractMs=${meta ? meta.extractMs : '?'} text=${meta ? meta.textChars : '?'}ch` +
+      ` specs=${item.specs ? 'ja' : 'nein'} preis=${item.price ? 'ja' : 'nein'}`,
+    );
+    res.json({ item, provider: used, fetcher: fetchUsed, meta: meta || null });
   } catch (error) {
-    console.error('API Import-Link Error:', error);
-    if (error.name === 'TimeoutError') {
-      return res.status(504).json({ error: 'Zeitüberschreitung beim Warten auf n8n.' });
+    if (error && typeof error.status === 'number') {
+      return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
     }
-    res.status(500).json({ error: error.message });
+    console.error('API Import-Link Error:', error);
+    if (error && error.name === 'TimeoutError') {
+      return res.status(504).json({ error: 'Zeitüberschreitung beim Crawl.' });
+    }
+    res.status(500).json({ error: error && error.message ? error.message : String(error) });
+  }
+});
+
+// Parst manuell eingefügten Seiteninhalt (Fallback, wenn der Auto-Crawl
+// blockiert war) mit dem gewählten Extraktor — ohne Fetch-Stufe. `{ text }`
+// ist Pflicht, `{ link }` optional (wird als Item-Link übernommen),
+// `{ provider }` wählt die Auswertung ("agy", "remote-ai", "local-cmd";
+// Default wie /api/import-link). Speichert nichts — das Frontend
+// persistiert das zurückgegebene Item selbst.
+app.post('/api/parse-text', needUser, async (req, res) => {
+  const journey = getJourney(req);
+  const { text, link, provider } = req.body || {};
+
+  try {
+    const { raw, provider: used, meta } = await parseProductText({ text, link, journey, provider });
+    const item = toJourneyItem(raw, typeof link === 'string' ? link : '');
+    console.log(
+      `[parse-text] journey=${journey} item=${JSON.stringify(item.name)} provider=${used}` +
+      ` extractMs=${meta.extractMs} text=${meta.textChars}ch` +
+      ` specs=${item.specs ? 'ja' : 'nein'} preis=${item.price ? 'ja' : 'nein'}`,
+    );
+    res.json({ item, provider: used, meta });
+  } catch (error) {
+    if (error && typeof error.status === 'number') {
+      return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+    }
+    console.error('API Parse-Text Error:', error);
+    res.status(500).json({ error: error && error.message ? error.message : String(error) });
+  }
+});
+
+// Benennt eine Journey (Verallgemeinerung des Produkts) — ohne Fetch, ohne
+// Speichern. `{ url|link, title, text }` liefert bereits geparsten Inhalt
+// (z.B. aus dem MCP-Crawl), `{ provider }` wählt die Auswertung ("agy",
+// "remote-ai", "local-cmd"; Default wie /api/import-link). Mit Provider
+// folgt die Benennung immer src/agent/prompts/journey_naming_prompt.md,
+// ohne gibt es einen markierten Offline-Rückfall (`provider: "fallback"`).
+// Antwort: `{ slug, name, category, provider, meta }`. Speichert nichts —
+// der Aufrufer (MCP `journey.create_from_link`) legt die Journey selbst an.
+app.post('/api/suggest-journey', needUser, async (req, res) => {
+  const { url, link, title, text, provider } = req.body || {};
+
+  try {
+    const { naming, provider: used, meta } = await suggestJourneyCategory({
+      url: url ?? link,
+      title,
+      text,
+      provider,
+    });
+    console.log(
+      `[suggest-journey] slug=${naming.slug} name=${JSON.stringify(naming.name)} provider=${used}` +
+      ` extractMs=${meta.extractMs} text=${meta.textChars}ch`,
+    );
+    res.json({ slug: naming.slug, name: naming.name, category: naming.category, provider: used, meta });
+  } catch (error) {
+    if (error && typeof error.status === 'number') {
+      return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+    }
+    console.error('API Suggest-Journey Error:', error);
+    res.status(500).json({ error: error && error.message ? error.message : String(error) });
   }
 });
 
