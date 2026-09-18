@@ -92,6 +92,28 @@ async function postJson(url, body) {
   return res.json();
 }
 
+// Löst einen Crawl-Job (`POST /api/parse-text` → 202) per
+// `GET /api/import-jobs/:id` auf: `done` liefert den Job mit Item, `errored`
+// (Fetch, LLM, CONTENT_BLOCKED) wirft wie früher der synchrone POST.
+async function awaitParseJob(jobId) {
+  const started = Date.now();
+  const timeoutMs = 5 * 60 * 1000;
+  for (;;) {
+    const job = await getJson(`${BASE_URL}/api/import-jobs/${encodeURIComponent(jobId)}`);
+    if (job.status === 'done') return job;
+    if (job.status === 'errored') {
+      throw new Error(
+        `KI-Extraktion des Produkts ist fehlgeschlagen: ${job.error || 'Unbekannter Fehler'}` +
+        `${job.code ? ` (${job.code})` : ''}`
+      );
+    }
+    if (Date.now() - started > timeoutMs) {
+      throw new Error('KI-Extraktion des Produkts: Zeitüberschreitung beim Warten auf den Import-Job.');
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
 // Wie `starsFromRating` in src/core/item-format.js: Zahl 0-5 -> ⭐-String.
 function starsFromRating(rating) {
   const stars = Math.max(0, Math.min(5, Math.round(Number(rating) || 0)));
@@ -498,10 +520,15 @@ async function handleCreateFromLink(params) {
       // `?journey=` mitgeben: Der Extraktions-Prompt nennt die Kaufreise als
       // Kontext — ohne den Param fiele das Backend auf "bike" zurück und die
       // Extraktion würde in Richtung Fahrrad-Specs gezogen.
-      const parsed = await postJson(
+      const submitted = await postJson(
         `${BASE_URL}/api/parse-text?journey=${encodeURIComponent(slug)}`,
         { text: content.text, link },
       );
+      // Seit der Crawl-Queue antwortet der POST sofort mit 202 (`{ jobId }`);
+      // das Tool braucht das Item synchron und löst den Job per GET auf.
+      const parsed = submitted && submitted.jobId && !submitted.item
+        ? await awaitParseJob(submitted.jobId)
+        : submitted;
       extracted = (parsed && parsed.item) || {};
       extractProvider = (parsed && parsed.provider) || null;
     } catch (err) {

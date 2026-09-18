@@ -5,6 +5,7 @@ import {
   faCompass,
   faEuroSign,
   faArrowUpRightFromSquare,
+  faCircleNotch,
   faCodeCompare,
   faPaste,
   faPencil,
@@ -25,13 +26,13 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableRow } from '@/components/ui/table'
+import { ImportJobCard } from '@/components/ImportJobCard'
 import { ImportLinkForm } from '@/components/ImportLinkForm'
 import { ManualContentDialog } from '@/components/ManualContentDialog'
 import { ProductDialog } from '@/components/ProductDialog'
 import { RatingDialog } from '@/components/RatingDialog'
 import { StarRatingDisplay } from '@/components/StarRating'
-import { useJourneyData } from '@/lib/journey-data-context'
-import { mergeParsedContent } from '@/lib/manual-content'
+import { useJourneyData, type TrackedImportJob } from '@/lib/journey-data-context'
 import { iconForSpecKey, parseSpecsString } from '@/lib/spec-icons'
 import { statusBadgeClass } from '@/lib/status-style'
 import { parseRating, translateStatus, type JourneyItem } from '@/lib/types'
@@ -42,8 +43,41 @@ interface Attribute {
   render: (item: JourneyItem, index: number) => ReactNode
 }
 
+/**
+ * Overlay für blockierte Einträge: Job-Status der Text-Auswertung (läuft mit
+ * Position, Fehler mit erneutem Einfügen) oder Standard-Hinweis.
+ */
+function NeedsContentOverlay({ job, onPaste }: { job?: TrackedImportJob; onPaste: () => void }) {
+  if (job?.status === 'in progress') {
+    return (
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-card/80 p-3 text-center">
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <FontAwesomeIcon icon={faCircleNotch} className="size-3.5" spin />
+          {job.position > 0 ? `Wartet — Position ${job.position}` : 'Wird ausgewertet…'}
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-card/80 p-3 text-center">
+      {job?.status === 'errored' ? (
+        <p className="text-xs text-muted-foreground">Auswertung fehlgeschlagen: {job.error || 'Unbekannter Fehler.'}</p>
+      ) : (
+        <p className="text-xs text-muted-foreground">Automatischer Import blockiert — Seiteninhalt manuell einfügen.</p>
+      )}
+      <Button variant="outline" size="sm" onClick={onPaste}>
+        <FontAwesomeIcon icon={faPaste} className="size-3.5" />
+        {job?.status === 'errored' ? 'Erneut einfügen' : 'Inhalt einfügen'}
+      </Button>
+    </div>
+  )
+}
+
 export function Compare() {
-  const { data, mutate } = useJourneyData()
+  const { data, mutate, jobs } = useJourneyData()
+  const linkJobs = jobs.filter((j) => j.kind === 'import-link')
+  const parseJobFor = (link?: string) =>
+    link ? jobs.find((j) => j.kind === 'parse-text' && j.link === link) : undefined
   const [dialog, setDialog] = useState<{ open: boolean; index: number | null }>({ open: false, index: null })
   const [ratingDialog, setRatingDialog] = useState<{ open: boolean; index: number | null }>({
     open: false,
@@ -77,15 +111,6 @@ export function Compare() {
   function handleDeleteProduct(index: number) {
     const name = items[index].name
     mutate((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }), `„${name}" gelöscht`)
-  }
-
-  /** Manuell eingefügter Inhalt wurde per LLM ausgewertet — Flag ist damit erledigt. */
-  function handleImportContent(index: number, item: JourneyItem) {
-    mutate((prev) => {
-      const next = [...prev.items]
-      next[index] = item
-      return { ...prev, items: next }
-    }, 'Inhalt übernommen')
   }
 
   const specKeys: string[] = []
@@ -140,6 +165,14 @@ export function Compare() {
 
       <ImportLinkForm />
 
+      {linkJobs.length > 0 && (
+        <div className="mb-4 flex flex-col gap-2">
+          {linkJobs.map((job) => (
+            <ImportJobCard key={job.jobId} job={job} />
+          ))}
+        </div>
+      )}
+
       {items.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border py-16 text-center">
           <FontAwesomeIcon icon={faCodeCompare} className="size-8 text-muted-foreground" />
@@ -171,15 +204,7 @@ export function Compare() {
                       </div>
                       {item.needsContent &&
                         (row === 0 ? (
-                          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-card/80 p-3 text-center">
-                            <p className="text-xs text-muted-foreground">
-                              Automatischer Import blockiert — Seiteninhalt manuell einfügen.
-                            </p>
-                            <Button variant="outline" size="sm" onClick={() => setPaste({ open: true, index })}>
-                              <FontAwesomeIcon icon={faPaste} className="size-3.5" />
-                              Inhalt einfügen
-                            </Button>
-                          </div>
+                          <NeedsContentOverlay job={parseJobFor(item.link)} onPaste={() => setPaste({ open: true, index })} />
                         ) : (
                           <div aria-hidden className="absolute inset-0 bg-card/60" />
                         ))}
@@ -255,9 +280,6 @@ export function Compare() {
           onOpenChange={(open) => setPaste((p) => ({ ...p, open }))}
           itemName={pasteItem.name}
           link={pasteItem.link}
-          onParsed={(parsed) => {
-            if (paste.index !== null) handleImportContent(paste.index, mergeParsedContent(pasteItem, parsed))
-          }}
         />
       )}
     </div>

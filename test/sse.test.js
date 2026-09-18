@@ -195,6 +195,67 @@ test('SSE ohne Token antwortet 401 statt Stream', async (t) => {
   assert.equal(status, 401);
 });
 
+test('fertiger Crawl-Job pusht journey-updated mit jobId/jobStatus/item nur an eigene Journey und Owner', async (t) => {
+  const prevFetch = process.env.CRAWL_FETCH_CMD;
+  const prevExtract = process.env.CRAWL_EXTRACT_CMD;
+  const base = await startApp(t, {
+    CRAWL_FETCH_CMD: `printf '%s' '{"title":"Stub-Seite","text":"${'Vergleichstext mit Inhalt. '.repeat(80)}"}'`,
+    CRAWL_EXTRACT_CMD: `cat >/dev/null; printf '%s' '{"name":"SSE-Bike","price":"999€","specs":"Rahmen: Alu"}'`,
+  });
+  try {
+    const own = openSse(base, 'bike', testKey(base, 'anna'));
+    const otherJourney = openSse(base, 'andere', testKey(base, 'anna'));
+    const otherOwner = openSse(base, 'bike', testKey(base, 'benni'));
+    t.after(() => {
+      own.close();
+      otherJourney.close();
+      otherOwner.close();
+    });
+    await waitFor(own.events, (e) => e.event === 'ready', 2000, 'ready');
+    await waitFor(otherJourney.events, (e) => e.event === 'ready', 2000, 'ready');
+    await waitFor(otherOwner.events, (e) => e.event === 'ready', 2000, 'ready');
+
+    const res = await postJson(base, '/api/import-link?journey=bike', {
+      link: 'https://example.com/bike',
+      provider: 'local-cmd',
+      fetcher: 'local-cmd',
+    }, testKey(base, 'anna'));
+    assert.equal(res.status, 202);
+    const created = await res.json();
+
+    const updated = await waitFor(own.events, (e) => {
+      if (e.event !== 'journey-updated') return false;
+      try {
+        return JSON.parse(e.data).jobId === created.jobId;
+      } catch {
+        return false;
+      }
+    }, 10000, 'job journey-updated');
+    const payload = JSON.parse(updated.data);
+    assert.equal(payload.slug, 'bike');
+    assert.equal(payload.jobStatus, 'done');
+    assert.equal(payload.item.name, 'SSE-Bike');
+    assert.equal(typeof payload.updatedAt, 'string');
+
+    await new Promise((r) => setTimeout(r, 600));
+    assert.equal(
+      otherJourney.events.filter((e) => e.event === 'journey-updated').length,
+      0,
+      'kein Job-Event für fremde Journey erwartet',
+    );
+    assert.equal(
+      otherOwner.events.filter((e) => e.event === 'journey-updated').length,
+      0,
+      'kein Job-Event für fremden Owner erwartet',
+    );
+  } finally {
+    if (prevFetch === undefined) delete process.env.CRAWL_FETCH_CMD;
+    else process.env.CRAWL_FETCH_CMD = prevFetch;
+    if (prevExtract === undefined) delete process.env.CRAWL_EXTRACT_CMD;
+    else process.env.CRAWL_EXTRACT_CMD = prevExtract;
+  }
+});
+
 test('POST /api/feedback triggert kein journey-updated (Scope: nur /api/data)', async (t) => {
   const base = await startApp(t);
   const sse = openSse(base, 'bike');

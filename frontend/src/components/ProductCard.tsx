@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faArrowUpRightFromSquare, faPaste, faPencil, faTrashCan } from '@fortawesome/free-solid-svg-icons'
+import { faArrowUpRightFromSquare, faCircleNotch, faPaste, faPencil, faTrashCan } from '@fortawesome/free-solid-svg-icons'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ManualContentDialog } from '@/components/ManualContentDialog'
 import { StarRatingDisplay } from '@/components/StarRating'
-import { mergeParsedContent } from '@/lib/manual-content'
+import { useJourneyData } from '@/lib/journey-data-context'
 import { parseSpecsString, iconForSpecKey } from '@/lib/spec-icons'
 import { statusBadgeClass } from '@/lib/status-style'
 import { parseRating, translateStatus, type JourneyItem } from '@/lib/types'
@@ -26,13 +26,17 @@ interface ProductCardProps {
   item: JourneyItem
   onEdit: () => void
   onDelete: () => void
-  onImportContent?: (item: JourneyItem) => void
 }
 
-export function ProductCard({ item, onEdit, onDelete, onImportContent }: ProductCardProps) {
+export function ProductCard({ item, onEdit, onDelete }: ProductCardProps) {
   const specs = parseSpecsString(item.specs)
   const [pasteOpen, setPasteOpen] = useState(false)
-  const showPaste = Boolean(item.needsContent && onImportContent)
+  const { jobs } = useJourneyData()
+  // Laufende/fehlgeschlagene Text-Auswertung zu diesem Platzhalter (Ergebnis
+  // übernimmt der Job-Flow automatisch, Fehler bieten erneutes Einfügen an).
+  const parseJob =
+    item.needsContent && item.link ? jobs.find((j) => j.kind === 'parse-text' && j.link === item.link) : undefined
+  const showPaste = Boolean(item.needsContent)
 
   return (
     <div className="flex flex-col rounded-xl border border-border bg-card">
@@ -68,13 +72,32 @@ export function ProductCard({ item, onEdit, onDelete, onImportContent }: Product
 
         {showPaste && (
           <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/40 p-3">
-            <p className="text-xs text-muted-foreground">
-              Automatischer Import blockiert — Seiteninhalt manuell einfügen.
-            </p>
-            <Button variant="outline" size="sm" className="self-start" onClick={() => setPasteOpen(true)}>
-              <FontAwesomeIcon icon={faPaste} className="size-3.5" />
-              Inhalt einfügen
-            </Button>
+            {parseJob?.status === 'in progress' ? (
+              <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                <FontAwesomeIcon icon={faCircleNotch} className="size-3.5" spin />
+                {parseJob.position > 0 ? `Wartet — Position ${parseJob.position}` : 'Wird ausgewertet…'}
+              </p>
+            ) : parseJob?.status === 'errored' ? (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Auswertung fehlgeschlagen: {parseJob.error || 'Unbekannter Fehler.'}
+                </p>
+                <Button variant="outline" size="sm" className="self-start" onClick={() => setPasteOpen(true)}>
+                  <FontAwesomeIcon icon={faPaste} className="size-3.5" />
+                  Erneut einfügen
+                </Button>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Automatischer Import blockiert — Seiteninhalt manuell einfügen.
+                </p>
+                <Button variant="outline" size="sm" className="self-start" onClick={() => setPasteOpen(true)}>
+                  <FontAwesomeIcon icon={faPaste} className="size-3.5" />
+                  Inhalt einfügen
+                </Button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -118,13 +141,7 @@ export function ProductCard({ item, onEdit, onDelete, onImportContent }: Product
         </div>
       </div>
       {showPaste && (
-        <ManualContentDialog
-          open={pasteOpen}
-          onOpenChange={setPasteOpen}
-          itemName={item.name}
-          link={item.link}
-          onParsed={(parsed) => onImportContent?.(mergeParsedContent(item, parsed))}
-        />
+        <ManualContentDialog open={pasteOpen} onOpenChange={setPasteOpen} itemName={item.name} link={item.link} />
       )}
     </div>
   )

@@ -572,6 +572,22 @@ test('crawlProduct mit explizitem fetcher headless nutzt ihn direkt (ohne Fallba
   }
 });
 
+// Wartet per `GET /api/import-jobs/:id` auf einen fertigen Job (`done` oder
+// `errored`) — der `POST` antwortet nur mit 202, die Arbeit läuft im Worker.
+async function waitForJob(base, jobId, key, timeoutMs = 15000) {
+  const start = Date.now();
+  for (;;) {
+    const res = await fetch(`${base}/api/import-jobs/${jobId}`, {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    assert.equal(res.status, 200, `GET /api/import-jobs/${jobId} unerwartet ${res.status}`);
+    const job = await res.json();
+    if (job.status !== 'in progress') return job;
+    if (Date.now() - start > timeoutMs) throw new Error(`Timeout beim Warten auf Job ${jobId}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 test('POST /api/parse-text parst eingefügten Inhalt ohne Fetch-Stufe', async (t) => {
   const base = await startApp(t, {
     CRAWL_EXTRACT_CMD: `cat >/dev/null; printf '%s' '{"name":"Paste-Auto","price":"39990€","specs":"Reichweite: 513 km"}'`,
@@ -586,15 +602,18 @@ test('POST /api/parse-text parst eingefügten Inhalt ohne Fetch-Stufe', async (t
       provider: 'local-cmd',
     }),
   });
-  assert.equal(res.status, 200);
-  const body = await res.json();
-  assert.equal(body.item.name, 'Paste-Auto');
-  assert.equal(body.item.link, 'https://example.com/model3');
-  assert.equal(body.provider, 'local-cmd');
-  assert.ok(body.meta && typeof body.meta.extractMs === 'number');
+  assert.equal(res.status, 202);
+  const created = await res.json();
+  assert.equal(created.status, 'in progress');
+  const job = await waitForJob(base, created.jobId, key);
+  assert.equal(job.status, 'done');
+  assert.equal(job.item.name, 'Paste-Auto');
+  assert.equal(job.item.link, 'https://example.com/model3');
+  assert.equal(job.provider, 'local-cmd');
+  assert.ok(job.meta && typeof job.meta.extractMs === 'number');
 });
 
-test('POST /api/import-link meldet CONTENT_BLOCKED bei inhaltsleerer Extraktion', async (t) => {
+test('POST /api/import-link meldet CONTENT_BLOCKED als errored-Job', async (t) => {
   const base = await startApp(t, {
     CRAWL_FETCH_CMD: `printf '%s' '{"title":"Seite","text":"${'Inhalt mit Substanz. '.repeat(80)}"}'`,
     CRAWL_EXTRACT_CMD: `cat >/dev/null; printf '%s' '{"name":"Nur-Name"}'`,
@@ -605,9 +624,12 @@ test('POST /api/import-link meldet CONTENT_BLOCKED bei inhaltsleerer Extraktion'
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({ link: 'https://example.com/bike', provider: 'local-cmd', fetcher: 'local-cmd' }),
   });
-  assert.equal(res.status, 502);
-  const body = await res.json();
-  assert.equal(body.code, 'CONTENT_BLOCKED');
+  assert.equal(res.status, 202);
+  const created = await res.json();
+  const job = await waitForJob(base, created.jobId, key);
+  assert.equal(job.status, 'errored');
+  assert.equal(job.code, 'CONTENT_BLOCKED');
+  assert.ok(typeof job.error === 'string' && job.error.length > 0);
 });
 
 test('POST /api/parse-text weist leeren Text und kombinierte Provider ab', async (t) => {
@@ -655,13 +677,49 @@ test('POST /api/import-link liefert Item plus Meta (Provider, Stufen, Zeiten)', 
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({ link: 'https://example.com/bike', provider: 'local-cmd', fetcher: 'local-cmd' }),
   });
-  assert.equal(res.status, 200);
-  const body = await res.json();
-  assert.equal(body.item.name, 'Stub-Bike');
-  assert.equal(body.provider, 'local-cmd');
-  assert.equal(body.fetcher, 'local-cmd');
-  assert.ok(body.meta && typeof body.meta.fetchMs === 'number' && typeof body.meta.extractMs === 'number');
-  assert.ok(body.meta.textChars > 1000);
+  assert.equal(res.status, 202);
+  const created = await res.json();
+  assert.equal(typeof created.jobId, 'string');
+  assert.equal(created.status, 'in progress');
+  assert.equal(typeof created.position, 'number');
+  assert.equal(typeof created.queueLength, 'number');
+  const job = await waitForJob(base, created.jobId, key);
+  assert.equal(job.status, 'done');
+  assert.equal(job.item.name, 'Stub-Bike');
+  assert.equal(job.provider, 'local-cmd');
+  assert.equal(job.fetcher, 'local-cmd');
+  assert.ok(job.meta && typeof job.meta.fetchMs === 'number' && typeof job.meta.extractMs === 'number');
+  assert.ok(job.meta.textChars > 1000);
+});
+
+test('GET /api/import-jobs/:id antwortet 404 bei unbekanntem Job und fremdem Owner', async (t) => {
+  const base = await startApp(t, {
+    CRAWL_EXTRACT_CMD: `cat >/dev/null; printf '%s' '{"name":"Job-Bike","price":"111€","specs":"Rahmen: Alu"}'`,
+  });
+  const anna = testKey(base, 'anna');
+  const benni = testKey(base, 'benni');
+  // Unbekannte ID …
+  const unknown = await fetch(`${base}/api/import-jobs/gibts-nicht`, {
+    headers: { Authorization: `Bearer ${anna}` },
+  });
+  assert.equal(unknown.status, 404);
+  // … und Annas Job aus Bennis Sicht (Owner-isoliert, verhält sich wie unbekannt).
+  const created = await (
+    await fetch(`${base}/api/parse-text?journey=bike`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${anna}` },
+      body: JSON.stringify({ text: 'Reichweite 513 km Preis 39990 Euro', provider: 'local-cmd' }),
+    })
+  ).json();
+  const foreign = await fetch(`${base}/api/import-jobs/${created.jobId}`, {
+    headers: { Authorization: `Bearer ${benni}` },
+  });
+  assert.equal(foreign.status, 404);
+  // Eigener Owner liest dagegen (wartend oder fertig — beides 200).
+  const own = await fetch(`${base}/api/import-jobs/${created.jobId}`, {
+    headers: { Authorization: `Bearer ${anna}` },
+  });
+  assert.equal(own.status, 200);
 });
 
 test('buildJourneyNamingPrompt lädt die Prompt-Datei und bettet den Inhalt ein', () => {

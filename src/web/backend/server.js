@@ -3,7 +3,8 @@ const dotenv = require('dotenv');
 const path = require('path');
 const { openDatabase } = require('../../db/store.js');
 const { optionalAuth, requireUser } = require('./auth.js');
-const { crawlProduct, listProviders, parseProductText, suggestJourneyCategory, toJourneyItem } = require('./crawl-providers.js');
+const { checkImportLinkReady, checkParseTextReady, crawlProduct, listProviders, parseProductText, suggestJourneyCategory, toJourneyItem } = require('./crawl-providers.js');
+const { createCrawlQueue, readQueueConcurrency } = require('./crawl-queue.js');
 
 // Load environment variables
 dotenv.config();
@@ -92,21 +93,43 @@ function getJourney(req) {
 // SSE-Live-Updates pro Journey (nur `GET /api/data`-Inhalt, kein Polling):
 // Clients subscriben `GET /api/data/events?journey=X`, der Browser
 // reconnectet automatisch per `retry:` (kein manueller Reload als Dauerlösung).
-// Scope: nur `POST /api/data` broadcastet an die Clients derselben Journey
+// Scope: `POST /api/data` broadcastet an die Clients derselben Journey
 // *desselben Owners* (Schlüssel `owner/slug` — kein User sieht fremde
-// Updates). `POST /api/feedback`, `PUT /api/journey-config`,
-// `POST /api/journeys` und `POST /api/import-link` (speichert nichts selbst)
-// bleiben bewusst draußen.
+// Updates); fertige Crawl-Jobs (`POST /api/import-link`, `POST /api/parse-text`
+// via Queue-`onSettled`) ebenfalls. `POST /api/feedback`,
+// `PUT /api/journey-config` und `POST /api/journeys` bleiben bewusst draußen.
 const journeySseClients = new Map(); // "owner/slug" -> Set<ServerResponse>
 
 function sseChannel(owner, slug) {
   return `${owner}/${slug}`;
 }
 
-function broadcastJourneyUpdate(owner, slug) {
+// Crawl-Job-Queue (In-Memory-FIFO, N parallele Läufer): `POST
+// /api/import-link` und `POST /api/parse-text` antworten sofort mit 202 und
+// lassen Fetch+LLM im Worker laufen. Fertige Records leben 1h (danach 404);
+// ein Neustart verwirft wartende/laufende Jobs (GET danach 404).
+// `onSettled` feuert pro fertigem Job den SSE-Broadcast an den Owner-Kanal.
+const crawlQueue = createCrawlQueue({
+  concurrency: readQueueConcurrency(),
+  // Fertiger Job → SSE an den Owner-Kanal (gleicher Event-Typ wie POST
+  // /api/data, mit Job-Feldern dazu; siehe broadcastJourneyUpdate).
+  onSettled: (job, { owner, journey }) => broadcastJourneyUpdate(owner, journey, {
+    jobId: job.jobId,
+    jobStatus: job.status,
+    ...(job.status === 'done' && job.item !== undefined ? { item: job.item } : {}),
+    ...(job.status === 'errored'
+      ? { error: job.error, ...(job.code !== undefined ? { code: job.code } : {}) }
+      : {}),
+  }),
+});
+
+// `extra` hängt optionale Felder an (Job-Fertigstellung: `jobId, jobStatus,
+// item?/error?/code?`); der `POST /api/data`-Pfad ruft ohne `extra` auf und
+// bleibt `{slug, updatedAt}`.
+function broadcastJourneyUpdate(owner, slug, extra) {
   const clients = journeySseClients.get(sseChannel(owner, slug));
   if (!clients || clients.size === 0) return;
-  const payload = JSON.stringify({ slug, updatedAt: new Date().toISOString() });
+  const payload = JSON.stringify({ slug, updatedAt: new Date().toISOString(), ...extra });
   const message = `event: journey-updated\ndata: ${payload}\n\n`;
   for (const client of [...clients]) {
     try {
@@ -343,63 +366,93 @@ app.get('/api/crawl-providers', needUser, (req, res) => {
   }
 });
 
-// Crawlt eine Produkt-URL in zwei Stufen (Inhalt parsen, dann mit LLM
-// auswerten; siehe `src/web/backend/crawl-providers.js`) und gibt das Item
-// zurück. `{ provider }` wählt die LLM-Auswertung (Default "n8n", bisher
-// N8N_WEBHOOK_URL), `{ fetcher }` das Parse-Tool (Default "direct").
-// Speichert nichts selbst — das Frontend persistiert direkt, ohne Kontrolle.
-app.post('/api/import-link', needUser, async (req, res) => {
+// Legt einen Crawl+LLM-Auftrag als Queue-Job an (zwei Stufen: Inhalt parsen,
+// dann mit LLM auswerten; siehe `src/web/backend/crawl-providers.js`) und
+// antwortet sofort mit 202 — der Main-Call blockiert nicht mehr (bis 60s
+// `CRAWL_TIMEOUT_MS`). `{ provider }` wählt die LLM-Auswertung, `{ fetcher }`
+// das Parse-Tool. Prüfbare Fehler (400/500/501) kommen weiterhin synchron;
+// Laufzeitfehler (Fetch, LLM, `CONTENT_BLOCKED`) werden `errored`-Jobs.
+// Speichert nichts selbst — das Frontend persistiert bei `done` direkt.
+app.post('/api/import-link', needUser, (req, res) => {
   const journey = getJourney(req);
   const { link, provider, fetcher } = req.body || {};
 
   try {
-    const { raw, provider: used, fetcher: fetchUsed, meta } = await crawlProduct({ url: link, journey, provider, fetcher });
-    const item = toJourneyItem(raw, link);
-    console.log(
-      `[import-link] journey=${journey} item=${JSON.stringify(item.name)} provider=${used} fetcher=${fetchUsed || 'kombiniert'}` +
-      `${meta && meta.fallbackFrom ? ` fallback=${meta.fallbackFrom}->${fetchUsed}` : ''}` +
-      ` fetchMs=${meta ? meta.fetchMs : '?'} extractMs=${meta ? meta.extractMs : '?'} text=${meta ? meta.textChars : '?'}ch` +
-      ` specs=${item.specs ? 'ja' : 'nein'} preis=${item.price ? 'ja' : 'nein'}`,
-    );
-    res.json({ item, provider: used, fetcher: fetchUsed, meta: meta || null });
+    checkImportLinkReady({ url: link, provider, fetcher });
   } catch (error) {
     if (error && typeof error.status === 'number') {
       return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
     }
     console.error('API Import-Link Error:', error);
-    if (error && error.name === 'TimeoutError') {
-      return res.status(504).json({ error: 'Zeitüberschreitung beim Crawl.' });
-    }
-    res.status(500).json({ error: error && error.message ? error.message : String(error) });
+    return res.status(500).json({ error: error && error.message ? error.message : String(error) });
   }
+  const job = crawlQueue.enqueue({
+    owner: req.user.id,
+    journey,
+    kind: 'import-link',
+    spec: { url: link, journey, provider, fetcher },
+    run: async (spec) => {
+      const { raw, provider: used, fetcher: fetchUsed, meta } = await crawlProduct(spec);
+      const item = toJourneyItem(raw, spec.url);
+      console.log(
+        `[import-link] journey=${spec.journey} item=${JSON.stringify(item.name)} provider=${used} fetcher=${fetchUsed || 'kombiniert'}` +
+        `${meta && meta.fallbackFrom ? ` fallback=${meta.fallbackFrom}->${fetchUsed}` : ''}` +
+        ` fetchMs=${meta ? meta.fetchMs : '?'} extractMs=${meta ? meta.extractMs : '?'} text=${meta ? meta.textChars : '?'}ch` +
+        ` specs=${item.specs ? 'ja' : 'nein'} preis=${item.price ? 'ja' : 'nein'}`,
+      );
+      return { item, provider: used, fetcher: fetchUsed, meta: meta || null };
+    },
+  });
+  res.status(202).json(job);
 });
 
 // Parst manuell eingefügten Seiteninhalt (Fallback, wenn der Auto-Crawl
-// blockiert war) mit dem gewählten Extraktor — ohne Fetch-Stufe. `{ text }`
-// ist Pflicht, `{ link }` optional (wird als Item-Link übernommen),
-// `{ provider }` wählt die Auswertung ("agy", "remote-ai", "local-cmd";
-// Default wie /api/import-link). Speichert nichts — das Frontend
-// persistiert das zurückgegebene Item selbst.
-app.post('/api/parse-text', needUser, async (req, res) => {
+// blockiert war) als Queue-Job — ohne Fetch-Stufe, Antwort sofort 202.
+// `{ text }` ist Pflicht, `{ link }` optional (wird als Item-Link
+// übernommen), `{ provider }` wählt die Auswertung ("agy", "remote-ai",
+// "local-cmd"; Default wie /api/import-link). Speichert nichts — das Frontend
+// persistiert das Item bei `done` selbst.
+app.post('/api/parse-text', needUser, (req, res) => {
   const journey = getJourney(req);
   const { text, link, provider } = req.body || {};
 
   try {
-    const { raw, provider: used, meta } = await parseProductText({ text, link, journey, provider });
-    const item = toJourneyItem(raw, typeof link === 'string' ? link : '');
-    console.log(
-      `[parse-text] journey=${journey} item=${JSON.stringify(item.name)} provider=${used}` +
-      ` extractMs=${meta.extractMs} text=${meta.textChars}ch` +
-      ` specs=${item.specs ? 'ja' : 'nein'} preis=${item.price ? 'ja' : 'nein'}`,
-    );
-    res.json({ item, provider: used, meta });
+    checkParseTextReady({ text, link, provider });
   } catch (error) {
     if (error && typeof error.status === 'number') {
       return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
     }
     console.error('API Parse-Text Error:', error);
-    res.status(500).json({ error: error && error.message ? error.message : String(error) });
+    return res.status(500).json({ error: error && error.message ? error.message : String(error) });
   }
+  const job = crawlQueue.enqueue({
+    owner: req.user.id,
+    journey,
+    kind: 'parse-text',
+    spec: { text, link, journey, provider },
+    run: async (spec) => {
+      const { raw, provider: used, meta } = await parseProductText(spec);
+      const item = toJourneyItem(raw, typeof spec.link === 'string' ? spec.link : '');
+      console.log(
+        `[parse-text] journey=${spec.journey} item=${JSON.stringify(item.name)} provider=${used}` +
+        ` extractMs=${meta.extractMs} text=${meta.textChars}ch` +
+        ` specs=${item.specs ? 'ja' : 'nein'} preis=${item.price ? 'ja' : 'nein'}`,
+      );
+      return { item, provider: used, meta };
+    },
+  });
+  res.status(202).json(job);
+});
+
+// Liest einen Crawl-Job (für Reload/Reconnect nach 202): `in progress` mit
+// Warteposition, `done` mit Item, `errored` mit Fehlertext. Owner-isoliert —
+// fremde/unbekannte/abgelaufene Jobs antworten 404 (Neustart verwirft Jobs).
+app.get('/api/import-jobs/:id', needUser, (req, res) => {
+  const job = crawlQueue.getJob(req.params.id, req.user.id);
+  if (!job) {
+    return res.status(404).json({ error: 'Job nicht gefunden (unbekannt, abgelaufen oder nach Neustart verworfen).' });
+  }
+  res.json(job);
 });
 
 // Benennt eine Journey (Verallgemeinerung des Produkts) — ohne Fetch, ohne

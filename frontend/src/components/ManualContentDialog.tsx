@@ -4,30 +4,29 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { CrawlProviderSelect } from '@/components/CrawlProviderSelect'
-import { parseItemFromText } from '@/lib/api'
 import { useJourneyData } from '@/lib/journey-data-context'
 import { trimPastedForUpload } from '@/lib/manual-content'
-import type { JourneyItem } from '@/lib/types'
 
 interface ManualContentDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   itemName: string
   link?: string
-  onParsed: (parsed: JourneyItem) => void
 }
 
 /**
  * Manueller Content-Fallback: Die Seite war per Auto-Crawl nicht lesbar
  * (Bot-Schutz). Der Nutzer kopiert den gesamten Seiteninhalt hierher —
- * Trimmen und LLM-Auswertung laufen danach automatisch.
+ * danach wird nur der Auftrag angelegt (Antwort sofort 202) und der Dialog
+ * geschlossen; Fortschritt und Ergebnis zeigt die Karte (Job-Status im
+ * „Inhalt einfügen“-Block, Übernahme automatisch + Toast).
  */
-export function ManualContentDialog({ open, onOpenChange, itemName, link, onParsed }: ManualContentDialogProps) {
-  const { journey } = useJourneyData()
+export function ManualContentDialog({ open, onOpenChange, itemName, link }: ManualContentDialogProps) {
+  const { startTextJob } = useJourneyData()
   /** Der eingefügte Inhalt bleibt im State und wird nie als Text gerendert — angezeigt wird nur die Zeichenzahl. */
   const [text, setText] = useState('')
   const [provider, setProvider] = useState('auto')
-  const [parsing, setParsing] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const pasteBoxRef = useRef<HTMLDivElement>(null)
 
   const pastedChars = trimPastedForUpload(text).length
@@ -35,7 +34,7 @@ export function ManualContentDialog({ open, onOpenChange, itemName, link, onPars
   function handleOpenChange(next: boolean) {
     if (!next) {
       setText('')
-      setParsing(false)
+      setSubmitting(false)
     }
     onOpenChange(next)
   }
@@ -49,15 +48,14 @@ export function ManualContentDialog({ open, onOpenChange, itemName, link, onPars
   async function handleParse(e: React.FormEvent) {
     e.preventDefault()
     const trimmed = trimPastedForUpload(text)
-    if (!trimmed || parsing) return
-    setParsing(true)
+    if (!trimmed || submitting) return
+    setSubmitting(true)
     try {
-      const { item } = await parseItemFromText(journey, trimmed, link, provider)
-      onParsed(item)
+      await startTextJob(trimmed, link, provider)
       handleOpenChange(false)
     } catch (error) {
       console.error(error)
-      setParsing(false)
+      setSubmitting(false)
       toast.error('Auswertung fehlgeschlagen', { description: (error as Error).message })
     }
   }
@@ -80,9 +78,9 @@ export function ManualContentDialog({ open, onOpenChange, itemName, link, onPars
             <div
               id="manualContentText"
               ref={pasteBoxRef}
-              tabIndex={parsing ? -1 : 0}
+              tabIndex={submitting ? -1 : 0}
               autoFocus
-              onPaste={parsing ? undefined : handlePaste}
+              onPaste={submitting ? undefined : handlePaste}
               onClick={() => pasteBoxRef.current?.focus()}
               className="flex min-h-40 cursor-text flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/40 p-6 text-center focus-visible:outline-2 focus-visible:outline-ring"
             >
@@ -98,7 +96,7 @@ export function ManualContentDialog({ open, onOpenChange, itemName, link, onPars
                   <p className="max-w-xs text-xs text-muted-foreground">
                     Inhalt übernommen — Text wird nicht angezeigt. Erneutes Einfügen ersetzt ihn.
                   </p>
-                  {!parsing && (
+                  {!submitting && (
                     <Button type="button" variant="ghost" size="sm" onClick={() => setText('')}>
                       Leeren
                     </Button>
@@ -109,11 +107,11 @@ export function ManualContentDialog({ open, onOpenChange, itemName, link, onPars
           </div>
           <CrawlProviderSelect stage="extract" value={provider} onChange={setProvider} id="manualContentProvider" />
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={parsing}>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
               Abbrechen
             </Button>
-            <Button type="submit" disabled={parsing || pastedChars === 0}>
-              {parsing ? 'Wird ausgewertet…' : 'Auswerten & übernehmen'}
+            <Button type="submit" disabled={submitting || pastedChars === 0}>
+              {submitting ? 'Wird beauftragt…' : 'Auswerten & übernehmen'}
             </Button>
           </DialogFooter>
         </form>

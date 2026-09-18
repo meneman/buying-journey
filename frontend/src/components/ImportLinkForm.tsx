@@ -5,47 +5,31 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { CrawlProviderSelect } from '@/components/CrawlProviderSelect'
-import { importItemFromLink } from '@/lib/api'
 import { useJourneyData } from '@/lib/journey-data-context'
-import { placeholderForBlockedLink } from '@/lib/manual-content'
 
 export function ImportLinkForm() {
-  const { journey, mutate } = useJourneyData()
+  const { startLinkJob } = useJourneyData()
   const [link, setLink] = useState('')
   const [provider, setProvider] = useState('auto')
   const [fetcher, setFetcher] = useState('auto')
-  const [loading, setLoading] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const trimmed = link.trim()
-    if (!trimmed || loading) return
+    if (!trimmed || submitting) return
 
-    setLoading(true)
+    // Nur der Auftrag wird angelegt (Antwort sofort 202) — Fortschritt,
+    // Übernahme und Fehler zeigt die Job-Karte unter dem Formular.
+    setSubmitting(true)
     try {
-      const { item } = await importItemFromLink(journey, trimmed, provider, fetcher)
-      mutate((prev) => ({ ...prev, items: [...prev.items, item] }))
+      await startLinkJob(trimmed, provider, fetcher)
       setLink('')
-      toast.success(`„${item.name}" per Link importiert`)
     } catch (error) {
-      // Seite blockiert den Auto-Crawl: markierten Platzhalter anhängen —
-      // der Inhalt wird danach über „Inhalt einfügen" manuell nachgereicht.
-      const placeholder = placeholderForBlockedLink(trimmed, error)
-      if (!placeholder) {
-        toast.error('Import fehlgeschlagen', { description: (error as Error).message })
-        return
-      }
       console.error(error)
-      mutate((prev) => ({
-        ...prev,
-        items: [...prev.items, placeholder],
-      }))
-      setLink('')
-      toast.warning('Crawl blockiert — Platzhalter angelegt', {
-        description: 'Inhalt über „Inhalt einfügen" manuell nachreichen.',
-      })
+      toast.error('Import fehlgeschlagen', { description: (error as Error).message })
     } finally {
-      setLoading(false)
+      setSubmitting(false)
     }
   }
 
@@ -58,10 +42,10 @@ export function ImportLinkForm() {
           placeholder="Produkt-Link einfügen, um ihn automatisch zu importieren…"
           value={link}
           onChange={(e) => setLink(e.target.value)}
-          disabled={loading}
+          disabled={submitting}
         />
-        <Button type="submit" variant="outline" className="shrink-0" disabled={loading || !link.trim()}>
-          {loading ? <FontAwesomeIcon icon={faCircleNotch} className="size-4" spin /> : <FontAwesomeIcon icon={faLink} className="size-4" />}
+        <Button type="submit" variant="outline" className="shrink-0" disabled={submitting || !link.trim()}>
+          {submitting ? <FontAwesomeIcon icon={faCircleNotch} className="size-4" spin /> : <FontAwesomeIcon icon={faLink} className="size-4" />}
           Importieren
         </Button>
       </div>

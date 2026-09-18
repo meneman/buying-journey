@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { AscentTracker } from '@/components/AscentTracker'
+import { ImportJobCard } from '@/components/ImportJobCard'
 import { ImportLinkForm } from '@/components/ImportLinkForm'
 import { ProductCard } from '@/components/ProductCard'
 import { ProductDialog } from '@/components/ProductDialog'
@@ -35,7 +36,8 @@ function formatDate(dateStr: string) {
 }
 
 export function Dashboard() {
-  const { data, mutate, mutateDebounced } = useJourneyData()
+  const { data, mutate, mutateDebounced, jobs } = useJourneyData()
+  const linkJobs = jobs.filter((j) => j.kind === 'import-link')
   const [dialog, setDialog] = useState<{ open: boolean; index: number | null }>({ open: false, index: null })
   const [newEvent, setNewEvent] = useState('')
   const [newDate, setNewDate] = useState(todayISO)
@@ -58,15 +60,6 @@ export function Dashboard() {
   function handleDeleteProduct(index: number) {
     const name = data.items[index].name
     mutate((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }), `„${name}" gelöscht`)
-  }
-
-  /** Manuell eingefügter Inhalt wurde per LLM ausgewertet — Flag ist damit erledigt. */
-  function handleImportContent(index: number, item: JourneyItem) {
-    mutate((prev) => {
-      const items = [...prev.items]
-      items[index] = item
-      return { ...prev, items }
-    }, 'Inhalt übernommen')
   }
 
   function handleAddLogEntry(e: React.FormEvent) {
@@ -126,6 +119,14 @@ export function Dashboard() {
 
           <ImportLinkForm />
 
+          {linkJobs.length > 0 && (
+            <div className="mb-4 flex flex-col gap-2">
+              {linkJobs.map((job) => (
+                <ImportJobCard key={job.jobId} job={job} />
+              ))}
+            </div>
+          )}
+
           {data.items.length === 0 ? (
             <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border py-16 text-center">
               <FontAwesomeIcon icon={faShieldHalved} className="size-8 text-muted-foreground" />
@@ -143,7 +144,6 @@ export function Dashboard() {
                   item={item}
                   onEdit={() => setDialog({ open: true, index })}
                   onDelete={() => handleDeleteProduct(index)}
-                  onImportContent={(merged) => handleImportContent(index, merged)}
                 />
               ))}
             </div>

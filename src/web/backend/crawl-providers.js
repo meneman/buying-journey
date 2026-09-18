@@ -690,11 +690,37 @@ function listProviders() {
 }
 
 /**
+ * Synchrone Vorab-Prüfung für `POST /api/import-link` (Single Source of Truth):
+ * Link-Format, Stufen-Namen und Konfiguration — alles billig prüfbar, ohne
+ * Fetch/LLM. Die Route antwortet bei Fehlern sofort (400/500/501); nur valide
+ * Aufträge werden Queue-Jobs. `crawlProduct` nutzt denselben Prolog, damit
+ * Direktaufrufe (Worker, Tests) identisch validieren.
+ */
+function checkImportLinkReady({ url, provider, fetcher }) {
+  validateLink(url);
+  // Beide Stufen-Namen zuerst auflösen: ungültige Request-Werte antworten 400,
+  // noch bevor fehlende Konfiguration (500/501) geprüft wird.
+  const extractorName = resolveProviderName(provider);
+  const fetcherName = resolveFetcherName(fetcher);
+  const extractor = providers[extractorName];
+  if (!extractor.isConfigured()) {
+    throw { status: extractorName === 'n8n' ? 500 : 501, message: extractorHint(extractorName) };
+  }
+  if (!extractor.combined) {
+    const fetcherImpl = fetchers[fetcherName];
+    if (!fetcherImpl.isConfigured()) {
+      throw { status: 501, message: fetcherName === 'local-cmd' ? 'CRAWL_FETCH_CMD ist nicht konfiguriert.' : 'Das Parse-Tool ist nicht verfügbar.' };
+    }
+  }
+  return { url, extractorName, fetcherName };
+}
+
+/**
  * Crawlt eine Produkt-URL in zwei Stufen (Inhalt parsen, dann mit LLM
  * auswerten) und gibt Rohprodukt, Stufen-Namen und Meta (Zeiten, Größen,
  * Fallback) zurück. Nur der kombinierte Legacy-Extraktor `n8n` crawlt selbst
  * (Stufe 1 entfällt, `fetcher: null`). Das Item-Mapping (`toJourneyItem`)
- * macht die Route.
+ * macht der Aufrufer.
  *
  * Fallback: Schlägt der Default-Fetcher `direct` fehl oder liefert weniger
  * sichtbaren Text als CRAWL_DIRECT_MIN_CHARS (JS-Seiten, Bot-Schutz), wird
@@ -702,17 +728,10 @@ function listProviders() {
  * Fetcher fallen nicht zurück — deren Fehler gehen direkt an den Aufrufer.
  */
 async function crawlProduct({ url, journey, provider, fetcher }) {
-  validateLink(url);
-  // Beide Stufen-Namen zuerst auflösen: ungültige Request-Werte antworten 400,
-  // noch bevor fehlende Konfiguration (500/501) geprüft wird.
-  const extractorName = resolveProviderName(provider);
-  const fetcherName = resolveFetcherName(fetcher);
+  const { extractorName, fetcherName } = checkImportLinkReady({ url, provider, fetcher });
   const extractor = providers[extractorName];
   const started = Date.now();
   const host = hostOf(url);
-  if (!extractor.isConfigured()) {
-    throw { status: extractorName === 'n8n' ? 500 : 501, message: extractorHint(extractorName) };
-  }
   if (extractor.combined) {
     crawlLog('start', `host=${host} journey=${journey} extractor=${extractorName} (kombiniert, ohne Fetch-Stufe)`);
     const raw = await extractor.crawl(url, journey);
@@ -720,10 +739,8 @@ async function crawlProduct({ url, journey, provider, fetcher }) {
     crawlLog('extract', `host=${host} provider=${extractorName} ms=${extractMs} felder=${presentFields(raw)}`);
     return { raw, provider: extractorName, fetcher: null, meta: baseMeta(host, null, 0, 0, 0, extractMs) };
   }
+  // Fetcher-Konfiguration ist via checkImportLinkReady bereits geprüft.
   const fetcherImpl = fetchers[fetcherName];
-  if (!fetcherImpl.isConfigured()) {
-    throw { status: 501, message: fetcherName === 'local-cmd' ? 'CRAWL_FETCH_CMD ist nicht konfiguriert.' : 'Das Parse-Tool ist nicht verfügbar.' };
-  }
   crawlLog('start', `host=${host} journey=${journey} extractor=${extractorName} fetcher=${fetcherName}`);
   const fetchStarted = Date.now();
   let content;
@@ -779,20 +796,19 @@ function assertUsableContent(raw, host) {
 }
 
 /**
- * Parst manuell eingefügten Seiteninhalt (Fallback, wenn der Auto-Crawl
- * blockiert war) mit dem gewählten Extraktor — ohne Fetch-Stufe. Der Inhalt
- * wird per `cleanPastedContent` getrimmt (Head/Skripte/Styles raus) und auf
- * CRAWL_MAX_CHARS gekappt. Kombinierte Extraktoren (n8n) können das nicht
- * (sie crawlen selbst) und antworten 400.
+ * Synchrone Vorab-Prüfung für `POST /api/parse-text` (Single Source of Truth):
+ * Text/Link-Format, Extraktor-Name und Konfiguration — alles billig prüfbar,
+ * ohne LLM. Die Route antwortet bei Fehlern sofort (400/500/501); nur valide
+ * Aufträge werden Queue-Jobs. `parseProductText` nutzt denselben Prolog, damit
+ * Direktaufrufe (Worker, Tests) identisch validieren.
  */
-async function parseProductText({ text, link, journey, provider }) {
+function checkParseTextReady({ text, link, provider }) {
   if (typeof text !== 'string' || !text.trim()) {
     throw { status: 400, message: 'Feld "text" (nicht-leerer String) ist erforderlich.' };
   }
   if (link !== undefined && typeof link !== 'string') {
     throw { status: 400, message: 'Feld "link" muss ein String sein.' };
   }
-  const cleanLink = typeof link === 'string' ? link : '';
   const extractorName = resolveProviderName(provider);
   const extractor = providers[extractorName];
   if (!extractor.isConfigured()) {
@@ -801,11 +817,25 @@ async function parseProductText({ text, link, journey, provider }) {
   if (extractor.combined) {
     throw { status: 400, code: 'NO_EXTRACTOR', message: 'Der kombinierte Provider "n8n" crawlt selbst — für eingefügten Text "agy", "remote-ai" oder "local-cmd" wählen.' };
   }
-  const started = Date.now();
   const cleaned = cleanPastedContent(text, readMaxChars());
   if (!cleaned) {
     throw { status: 400, message: 'Der eingefügte Inhalt enthält keinen verwertbaren Text.' };
   }
+  return { text, link: typeof link === 'string' ? link : '', extractorName, cleaned };
+}
+
+/**
+ * Parst manuell eingefügten Seiteninhalt (Fallback, wenn der Auto-Crawl
+ * blockiert war) mit dem gewählten Extraktor — ohne Fetch-Stufe. Der Inhalt
+ * wird per `cleanPastedContent` getrimmt (Head/Skripte/Styles raus) und auf
+ * CRAWL_MAX_CHARS gekappt. Kombinierte Extraktoren (n8n) können das nicht
+ * (sie crawlen selbst) und antworten 400.
+ */
+async function parseProductText({ text, link, journey, provider }) {
+  const { extractorName, cleaned } = checkParseTextReady({ text, link, provider });
+  const cleanLink = typeof link === 'string' ? link : '';
+  const extractor = providers[extractorName];
+  const started = Date.now();
   crawlLog('parse-text', `journey=${journey} extractor=${extractorName} roh=${text.length}ch bereinigt=${cleaned.length}ch`);
   const raw = await extractor.extract(cleanLink, journey, { title: '', text: cleaned });
   const extractMs = Date.now() - started;
@@ -902,6 +932,8 @@ module.exports = {
   resolveFetcherName,
   listProviders,
   validateLink,
+  checkImportLinkReady,
+  checkParseTextReady,
   crawlProduct,
   parseProductText,
   suggestJourneyCategory,
