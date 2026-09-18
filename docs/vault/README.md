@@ -1,6 +1,6 @@
 # Vault – Übersicht 🗂️
 
-Dieser Ordner (`docs/vault`) ist ein **Obsidian Vault** – der Wissens- und Notizbereich zu [JourneyPath](../../README.md), dem KI-gestützten Kauf-Begleiter. (Das Repo-`README.md` trägt noch den Ursprungsnamen *VeloPath* – siehe [[Was-ist-JourneyPath]].)
+Dieser Ordner (`docs/vault`) ist ein **Obsidian Vault** – der Wissens- und Notizbereich zu [JourneyPath](../../README.md), dem KI-gestützten Kauf-Begleiter. (Ursprünglich hieß das Projekt *VeloPath* – siehe [[Was-ist-JourneyPath]].)
 
 ## Öffnen in Obsidian
 

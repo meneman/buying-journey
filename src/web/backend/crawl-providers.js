@@ -3,6 +3,10 @@
 // Stufe 1 — Inhalt parsen (Fetcher `fetch(url) -> { title, text }`):
 // - `direct` (Default, ohne Konfiguration): Backend lädt die Seite selbst und
 //   extrahiert Titel + Fließtext (auf CRAWL_MAX_CHARS begrenzt).
+// - `headless`: Puppeteer rendert JavaScript (JS-Seiten, Bot-Schutz wie bei
+//   Tesla). Konfiguriert = Paket installiert; Timeout via
+//   CRAWL_HEADLESS_TIMEOUT_MS. Dient zugleich als Auto-Fallback für `direct`
+//   (siehe CRAWL_DIRECT_MIN_CHARS unten).
 // - `local-cmd`: externes Parse-Tool auf dieser Maschine (z.B. Skript in einer
 //   tmux-Session) via CRAWL_FETCH_CMD. URL/Journey als Platzhalter
 //   {url}/{journey} sowie Env CRAWL_URL/CRAWL_JOURNEY; stdout ist

@@ -122,13 +122,20 @@ function startMcp(t, baseUrl, token) {
 }
 
 const LLM_STUB_PATH = path.join(__dirname, 'helpers', 'llm-stub.js');
-const LLM_ENV_KEYS = ['CRAWL_EXTRACT_PROVIDER', 'CRAWL_EXTRACT_CMD', 'N8N_WEBHOOK_URL'];
+const LLM_ENV_KEYS = ['CRAWL_EXTRACT_PROVIDER', 'CRAWL_EXTRACT_CMD', 'N8N_WEBHOOK_URL', 'LLM_STUB_LOG'];
 
-/** Schaltet die Backend-KI auf den deterministischen Stub um (local-cmd). */
+/**
+ * Schaltet die Backend-KI auf den deterministischen Stub um (local-cmd).
+ * Rückgabe: `calls()` liefert die Anfragen, die der Stub gesehen hat — damit
+ * lässt sich prüfen, was die Pipeline dem "LLM" schickt (z.B. der
+ * Journey-Kontext der Extraktion).
+ */
 function useLlmStub(t) {
   const snap = Object.fromEntries(LLM_ENV_KEYS.map((k) => [k, process.env[k]]));
+  const logPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bike-llm-stub-')), 'calls.jsonl');
   process.env.CRAWL_EXTRACT_PROVIDER = 'local-cmd';
   process.env.CRAWL_EXTRACT_CMD = `node "${LLM_STUB_PATH}"`;
+  process.env.LLM_STUB_LOG = logPath;
   delete process.env.N8N_WEBHOOK_URL;
   t.after(() => {
     for (const k of LLM_ENV_KEYS) {
@@ -136,6 +143,16 @@ function useLlmStub(t) {
       else process.env[k] = snap[k];
     }
   });
+  return {
+    calls() {
+      if (!fs.existsSync(logPath)) return [];
+      return fs
+        .readFileSync(logPath, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+    },
+  };
 }
 
 const PRODUCT_HTML = `<!doctype html><html><head><title>MCP Testrad Pro</title></head><body><h1>MCP Testrad Pro</h1><p>Preis: 1299€</p><p>Rahmen: Aluminium, Gewicht: 14.2 kg</p></body></html>`;
@@ -618,6 +635,26 @@ test('journey.create_from_link ohne Slug nennt eine Model-3-Seite "elektro-auto"
   const data = await (await getAuthed(base, '/api/data?journey=elektro-auto')).json();
   assert.equal(data.items.length, 1);
   assert.equal(data.items[0].link, pageUrl);
+});
+
+test('journey.create_from_link: die Extraktion bekommt die neue Journey als Kontext', async (t) => {
+  // Regression: Der Extraktions-Prompt nennt die Kaufreise. Ohne `?journey=`
+  // auf POST /api/parse-text fiel das Backend auf "bike" zurück — die
+  // Extraktion einer Model-3-Seite lief also im Fahrrad-Kontext.
+  const stub = useLlmStub(t);
+  const base = await startBackend(t);
+  const pageUrl = await startStaticServer(t, TESLA_HTML);
+  const client = startMcp(t, base);
+  await handshake(client);
+  const res = await client.rpc('tools/call', {
+    name: 'journey.create_from_link',
+    arguments: { link: pageUrl },
+  });
+  assert.ok(!res.result.isError, `unerwarteter Tool-Fehler: ${JSON.stringify(res)}`);
+  assert.equal(JSON.parse(res.result.content[0].text).slug, 'elektro-auto');
+  const extraction = stub.calls().filter((c) => c.task !== 'journey-naming');
+  assert.equal(extraction.length, 1, 'genau ein Extraktions-Aufruf erwartet');
+  assert.equal(extraction[0].journey, 'elektro-auto');
 });
 
 test('journey.create_from_link mit explizitem Slug behält diesen bei', async (t) => {

@@ -37,4 +37,6 @@ Field rules:
 * `category`: Lowercase keyword for icon/grouping (e.g., `auto`, `fahrrad`, `laptop`, `smartphone`, `moebel`), empty string if nothing fits.
 * If the page reveals no recognizable product, fall back to `{"slug": "produkte", "name": "Produkte", "category": ""}`.
 
-Note: The MCP tool `journey.create_from_link` applies a deterministic keyword heuristic with the same goal when no LLM is available (see `suggestJourney` in `src/mcp/server.js`). Prefer this prompt whenever an LLM does the naming.
+Note: This prompt is the *only* source for journey naming — there is no keyword heuristic. It is used by `POST /api/suggest-journey` (see `suggestJourneyCategory` in `src/web/backend/crawl-providers.js`), which the MCP tool `journey.create_from_link` calls when no `slug` is given. Naming-capable extractors are `agy`, `remote-ai` and `local-cmd`; the response shape is enforced via `src/web/backend/journey-naming-schema.json`.
+
+Without a naming-capable provider there is no heuristic either: the backend answers with an honestly marked offline fallback (`provider: "fallback"`) built from the first three words of the page title, and the MCP result flags it as `slugSource: "fallback"`.

@@ -3,7 +3,13 @@
 // antwortet deterministisch — Naming ({ task: 'journey-naming' }) oder
 // Produkt-Extraktion ({ journey, ... }). Kein echtes LLM, nur damit Tests
 // die komplette KI-Pipeline (Prompt bauen → aufrufen → parsen) durchlaufen.
+//
+// Ist LLM_STUB_LOG gesetzt, wird jede Anfrage als JSON-Zeile angehängt —
+// so können Tests prüfen, was die Pipeline dem "LLM" tatsächlich schickt
+// (z.B. ob der Journey-Kontext stimmt).
 'use strict';
+
+const fs = require('node:fs');
 
 let input = '';
 process.stdin.setEncoding('utf8');
@@ -16,6 +22,13 @@ process.stdin.on('end', () => {
     payload = JSON.parse(input);
   } catch {
     payload = {};
+  }
+  if (process.env.LLM_STUB_LOG) {
+    try {
+      fs.appendFileSync(process.env.LLM_STUB_LOG, `${JSON.stringify(payload)}\n`);
+    } catch {
+      // Logging ist optional — ein Schreibfehler darf den Stub nicht kippen.
+    }
   }
   const haystack = `${payload.title || ''}\n${payload.text || ''}\n${payload.url || ''}`;
   const isTesla = /tesla|model 3|wltp/i.test(haystack);

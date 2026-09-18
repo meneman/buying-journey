@@ -3,7 +3,7 @@
 > Ein Satz: **JourneyPath ist ein KI-gestützter Kauf-Wrapper** — eine lokale Hülle um den gesamten Kaufentscheidungsprozess, in die Mensch *und* KI-Assistent hineinarbeiten.
 
 > [!info] Namen im Projekt
-> Die App heißt in der UI **JourneyPath** (`frontend/index.html`, `AppHeader.tsx`, Crawler-User-Agent). Das Repo-`README.md` trägt noch den Ursprungsnamen **VeloPath — Fahrradkauf-Begleiter**, weil alles als Fahrradkauf-Hilfe (`bike`) startete. Gemeint ist dieselbe App; die App ist inzwischen kategorie-unabhängig.
+> Die App heißt **JourneyPath** — in der UI (`frontend/index.html`, `AppHeader.tsx`, Crawler-User-Agent) und im Repo-`README.md`. Der Ursprungsname **VeloPath** stammt daher, dass alles als Fahrradkauf-Hilfe (Journey `bike`) startete; er taucht nur noch als historische Notiz auf. Die App ist inzwischen kategorie-unabhängig.
 
 ## Sinn
 

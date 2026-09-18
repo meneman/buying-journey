@@ -495,7 +495,13 @@ async function handleCreateFromLink(params) {
   let extractProvider = offline ? 'fallback' : null;
   if (!offline) {
     try {
-      const parsed = await postJson(`${BASE_URL}/api/parse-text`, { text: content.text, link });
+      // `?journey=` mitgeben: Der Extraktions-Prompt nennt die Kaufreise als
+      // Kontext — ohne den Param fiele das Backend auf "bike" zurück und die
+      // Extraktion würde in Richtung Fahrrad-Specs gezogen.
+      const parsed = await postJson(
+        `${BASE_URL}/api/parse-text?journey=${encodeURIComponent(slug)}`,
+        { text: content.text, link },
+      );
       extracted = (parsed && parsed.item) || {};
       extractProvider = (parsed && parsed.provider) || null;
     } catch (err) {
