@@ -421,7 +421,7 @@ function openDatabase(dbPathExplicit) {
       .map((r) => ({ date: r.date, event: r.event }));
     const items = db
       .prepare(
-        'SELECT name, price, rating, status, notes, link, specs, needs_content FROM items WHERE owner_id = ? AND journey_slug = ? ORDER BY position, id'
+        'SELECT name, price, rating, status, notes, link, specs FROM items WHERE owner_id = ? AND journey_slug = ? ORDER BY position, id'
       )
       .all(owner, slug)
       .map((item) => ({
@@ -432,8 +432,6 @@ function openDatabase(dbPathExplicit) {
         notes: item.notes,
         link: item.link,
         specs: specsJsonToString(item.specs),
-        // Nur gesetzt übertragen — das Drahtformat bleibt für normale Items unverändert.
-        ...(item.needs_content ? { needsContent: true } : {}),
       }));
     const specs = db
       .prepare(
@@ -492,8 +490,8 @@ function openDatabase(dbPathExplicit) {
       });
       db.prepare('DELETE FROM items WHERE owner_id = ? AND journey_slug = ?').run(owner, slug);
       const insertItem = db.prepare(
-        `INSERT INTO items (owner_id, journey_slug, name, price, rating, status, notes, link, specs, needs_content, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, json(?), ?, ?)`
+        `INSERT INTO items (owner_id, journey_slug, name, price, rating, status, notes, link, specs, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, json(?), ?)`
       );
       (data.items || []).forEach((item, i) => {
         insertItem.run(
@@ -506,7 +504,6 @@ function openDatabase(dbPathExplicit) {
           item.notes || '',
           item.link || '',
           specsStringToJson(item.specs),
-          item.needsContent ? 1 : 0,
           i
         );
       });

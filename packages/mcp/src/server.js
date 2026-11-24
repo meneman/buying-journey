@@ -3,12 +3,15 @@
 //
 // Ruft ausschließlich die REST-API des Backends auf (kein Direkt-DB-Zugriff):
 //   GET /api/journeys                  Existenzprüfung (verhindert stilles Anlegen)
+//   GET /api/journey-configs           Alle Journeys inkl. Basis-Config listen
 //   POST /api/journeys                 Journey explizit anlegen (201, 409 bei Duplikat)
+//   DELETE /api/journeys?journey=X     Journey löschen
 //   GET /api/data?journey=X            Status, Logs, Items, Specs, Notizen, Titel
 //   POST /api/data?journey=X           Vollständiges Dokument zurückschreiben
 //   GET /api/feedback?journey=X        Feedback-Text
+//   POST /api/feedback?journey=X       Feedback-Text speichern
 //   GET /api/journey-config?journey=X  Basis-Eigenschaften + Settings
-//   POST /api/crawl-link               Crawl-Inhalt vom Backend laden (ohne Puppeteer im Client)
+//   PUT /api/journey-config?journey=X  Basis-Eigenschaften + Settings aktualisieren
 //
 // Das Backend muss laufen. Basis-URL konfigurierbar:
 //   MCP_BASE_URL=http://localhost:3000  (Default; sonst PORT, Default 3000)
@@ -17,13 +20,12 @@
 //   oder src/agent/scripts/create-api-key.js)
 //
 // Protokoll: newline-delimited JSON-RPC 2.0 auf stdin/stdout (MCP-Transport),
-// Logs gehen nach stderr. Tools:
-//   `journey.get`               Dokument lesen (legt nichts an)
-//   `journey.add_item`          Produkt anlegen/aktualisieren (Upsert per Name)
-//   `journey.crawl_link`        Produktseite über Backend laden (Titel + Text, speichert nichts)
-//   `journey.create_from_link`  Neue Journey anlegen + Initial-Link als erstes Produkt crawlen
-//                               (Slug optional — sonst LLM-Benennung; Erstprodukt per
-//                               LLM-Extraktion, offline Titel + Link als markierter Rückfall)
+// Logs gehen nach stderr. Der MCP-Client erledigt Web-Recherche und Extraktion
+// selbst und übergibt strukturierte Daten direkt an die CRUD-Tools (`journey.help`,
+// `journey.list`, `journey.create`, `journey.update_config`, `journey.delete`,
+// `journey.get`, `journey.add_item`, `journey.delete_item`, `journey.update_meta`,
+// `journey.add_log`, `journey.delete_log`, `journey.set_spec`, `journey.delete_spec`,
+// `journey.set_feedback`).
 // Unbekannter/leerer Slug und unerreichbares Backend liefern definierte
 // Fehler, ohne etwas anzulegen oder zu schreiben.
 
@@ -66,8 +68,6 @@ function backendError(url, status, snippet) {
 }
 
 const FETCH_TIMEOUT_MS = 15000;
-const CRAWL_DEFAULT_MAX_CHARS = 15000;
-const CRAWL_MAX_CHARS_LIMIT = 50000;
 
 // Wie das Backend (`getJourney` in src/web/backend/server.js): unsichere
 // Zeichen raus. Anders als dort gibt es hier KEINEN 'bike'-Fallback — ein
@@ -115,28 +115,6 @@ function putJson(url, body) {
 
 function deleteJson(url) {
   return requestJson('DELETE', url);
-}
-
-// Löst einen Crawl-Job (`POST /api/parse-text` → 202) per
-// `GET /api/import-jobs/:id` auf: `done` liefert den Job mit Item, `errored`
-// (Fetch, LLM, CONTENT_BLOCKED) wirft wie früher der synchrone POST.
-async function awaitParseJob(jobId) {
-  const started = Date.now();
-  const timeoutMs = 5 * 60 * 1000;
-  for (;;) {
-    const job = await getJson(`${BASE_URL}/api/import-jobs/${encodeURIComponent(jobId)}`);
-    if (job.status === 'done') return job;
-    if (job.status === 'errored') {
-      throw new Error(
-        `KI-Extraktion des Produkts ist fehlgeschlagen: ${job.error || 'Unbekannter Fehler'}` +
-        `${job.code ? ` (${job.code})` : ''}`
-      );
-    }
-    if (Date.now() - started > timeoutMs) {
-      throw new Error('KI-Extraktion des Produkts: Zeitüberschreitung beim Warten auf den Import-Job.');
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
 }
 
 // Wie `starsFromRating` in src/core/item-format.js: Zahl 0-5 -> ⭐-String.
@@ -191,9 +169,7 @@ function invalidParams(message) {
   return err;
 }
 
-// Prüft die optionalen Item-Felder (Preis/Notizen/Rating/Status/Specs) —
-// gemeinsam genutzt von journey.add_item und journey.create_from_link, damit
-// beide Tools dieselben Regeln melden.
+// Prüft die optionalen Item-Felder (Preis/Notizen/Rating/Status/Specs) für journey.add_item.
 function validateOptionalItemFields(args) {
   for (const key of ['price', 'notes']) {
     if (args[key] !== undefined && typeof args[key] !== 'string') {
@@ -246,56 +222,6 @@ function validateAddItemArgs(raw) {
   }
   const optional = validateOptionalItemFields(args);
   return { slug, name, link: args.link, ...optional };
-}
-
-// Zählt die ⭐-Bewertung aus POST /api/parse-text zurück auf 0-5.
-function countStars(rating) {
-  return (String(rating || '').match(/⭐/g) || []).length;
-}
-
-// Wandelt den "<br>"-Specs-String aus POST /api/parse-text in das
-// Specs-Objekt von journey.add_item um (leere Schlüssel fallen raus).
-function specsStringToObject(specs) {
-  const out = {};
-  if (!specs) return out;
-  for (const part of String(specs).split(/<br\s*\/?>/i)) {
-    const trim = part.trim();
-    if (!trim) continue;
-    const colon = trim.indexOf(':');
-    if (colon <= 0) continue;
-    const key = trim.slice(0, colon).trim().toLowerCase();
-    const value = trim.slice(colon + 1).trim();
-    if (key && value) out[key] = value;
-  }
-  return out;
-}
-
-// Prüft die Argumente von journey.create_from_link: nur der Link ist Pflicht,
-// der Slug ist optional (Default: KI-Benennung per POST /api/suggest-journey).
-// Explizit übergebene Item-Felder überschreiben die KI-Extraktion
-// (POST /api/parse-text), alle Felder folgen den Regeln von journey.add_item.
-function validateCreateFromLinkArgs(raw) {
-  const args = (raw && raw.arguments) || {};
-  let slug;
-  if (args.slug !== undefined) {
-    if (typeof args.slug !== 'string' || !args.slug.trim()) {
-      throw invalidParams('Parameter "slug" muss ein nicht-leerer String sein.');
-    }
-    slug = sanitizeSlug(args.slug);
-    if (!slug) {
-      throw invalidParams('Parameter "slug" ergibt kein gültiges Journey-Kürzel (erlaubt: a-z, 0-9, ., -).');
-    }
-  }
-  const { link, maxChars } = validateCrawlArgs({ arguments: args });
-  let name;
-  if (args.name !== undefined) {
-    if (typeof args.name !== 'string' || !args.name.trim()) {
-      throw invalidParams('Parameter "name" muss ein nicht-leerer String sein.');
-    }
-    name = args.name.trim();
-  }
-  const optional = validateOptionalItemFields(args);
-  return { slug, link, maxChars, name, ...optional };
 }
 
 async function handleAddItem(params) {
@@ -363,73 +289,6 @@ async function handleAddItem(params) {
   };
 }
 
-// Lädt eine Produktseite über das Backend und gibt Titel + Fließtext zurück.
-// Speichert nichts — der Aufrufer extrahiert daraus die Produktdaten (siehe
-// src/agent/prompts/product_extraction_prompt.md) und ruft danach
-// journey.add_item auf.
-function validateCrawlArgs(raw) {
-  const args = (raw && raw.arguments) || {};
-  if (typeof args.link !== 'string' || !args.link.trim()) {
-    throw invalidParams('Parameter "link" (nicht-leerer String) ist erforderlich.');
-  }
-  let url;
-  try {
-    url = new URL(args.link.trim());
-  } catch {
-    throw invalidParams('Parameter "link" ist keine gültige URL.');
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw invalidParams('Parameter "link" muss eine http(s)-URL sein.');
-  }
-  let maxChars = CRAWL_DEFAULT_MAX_CHARS;
-  if (args.maxChars !== undefined) {
-    const num = typeof args.maxChars === 'string' ? Number(args.maxChars) : args.maxChars;
-    if (typeof num !== 'number' || !Number.isFinite(num) || num < 1) {
-      throw invalidParams('Parameter "maxChars" muss eine positive Zahl sein.');
-    }
-    maxChars = Math.min(Math.floor(num), CRAWL_MAX_CHARS_LIMIT);
-  }
-  return { link: url.href, maxChars };
-}
-
-async function crawlPage(link, maxChars) {
-  let res;
-  try {
-    res = await postJson(`${BASE_URL}/api/crawl-link`, { link, maxChars });
-  } catch (err) {
-    if (/nicht erreichbar|MCP_AUTH_TOKEN|Anmeldung fehlgeschlagen/.test(err.message)) throw err;
-    throw new Error(`Seite konnte nicht geladen werden (${link}): ${err.message}`);
-  }
-  return {
-    title: res.title || '',
-    text: res.text || '',
-    truncated: Boolean(res.truncated),
-  };
-}
-
-async function handleCrawlLink(params) {
-  const { link, maxChars } = validateCrawlArgs(params);
-  const crawled = await crawlPage(link, maxChars);
-  const truncated = crawled.truncated !== undefined ? crawled.truncated : crawled.text.length > maxChars;
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(
-          {
-            url: link,
-            title: crawled.title,
-            text: truncated ? crawled.text.slice(0, maxChars) : crawled.text,
-            truncated,
-          },
-          null,
-          2
-        ),
-      },
-    ],
-  };
-}
-
 // Fragt die bekannten Journeys ab und prüft, ob der Slug existiert. Wirft mit
 // klarer Nachricht bei unerreichbarem Backend oder unbekanntem Slug. Erst
 // danach darf /api/data angefasst werden — vorher anzufragen würde die
@@ -447,178 +306,6 @@ async function assertKnownJourney(slug) {
     );
   }
   return journeys;
-}
-
-// Gegenstück für journey.create_from_link: der Slug darf noch NICHT
-// existieren (kein stilles Wiederverwenden, kein Überschreiben). Wirft mit
-// klarer Nachricht bei unerreichbarem Backend oder belegtem Slug.
-async function assertUnknownJourney(slug) {
-  let journeys;
-  try {
-    journeys = await getJson(`${BASE_URL}/api/journeys`);
-  } catch (err) {
-    throw new Error(`Backend unter ${BASE_URL} ist nicht erreichbar: ${err.message}`);
-  }
-  if (Array.isArray(journeys) && journeys.includes(slug)) {
-    throw new Error(
-      `Journey "${slug}" existiert bereits — nutze journey.add_item, um ein Produkt hinzuzufügen.`
-    );
-  }
-  return journeys;
-}
-
-// Legt eine neue Journey an und crawlt den Initial-Link als erstes Produkt.
-// Alles KI-gesteuert: Ohne expliziten Slug kommt der Journey-Name aus der
-// LLM-Benennung (POST /api/suggest-journey nach
-// src/agent/prompts/journey_naming_prompt.md), das Erstprodukt aus der
-// LLM-Extraktion (POST /api/parse-text nach
-// src/agent/prompts/product_extraction_prompt.md). Explizit übergebene
-// Felder überschreiben die Extraktion. Reihenfolge: erst crawlen, dann
-// anlegen — schlägt der Crawl fehl, bleibt nichts zurück. Ohne KI-Provider
-// (agy, remote-ai oder local-cmd) gibt es statt eines Fehlers einen ehrlich
-// markierten Offline-Rückfall (Titel + Link, `ai: "fallback"`). Das Item
-// übernimmt handleAddItem (Upsert-Regeln, Header).
-async function handleCreateFromLink(params) {
-  const { slug: givenSlug, link, maxChars, name: givenName, price, rating, status, notes, specs } =
-    validateCreateFromLinkArgs(params);
-  if (givenSlug) {
-    await assertUnknownJourney(givenSlug);
-  }
-  const crawled = await crawlPage(link, maxChars);
-  const truncated = crawled.truncated !== undefined ? crawled.truncated : crawled.text.length > maxChars;
-  const content = {
-    title: String(crawled.title || ''),
-    text: crawled.text.slice(0, maxChars),
-  };
-  let slug = givenSlug;
-  let journeyName;
-  let category;
-  let slugSource = 'explicit';
-  let namingProvider = null;
-  if (!slug) {
-    let suggested;
-    try {
-      suggested = await postJson(`${BASE_URL}/api/suggest-journey`, { url: link, ...content });
-    } catch (err) {
-      if (/nicht erreichbar|MCP_AUTH_TOKEN|Anmeldung fehlgeschlagen/.test(err.message)) throw err;
-      throw new Error(`KI-Benennung der Journey ist fehlgeschlagen (${link}): ${err.message}`);
-    }
-    slug = sanitizeSlug(suggested.slug);
-    if (!slug) {
-      throw new Error('Benennung der Journey lieferte kein gültiges Journey-Kürzel.');
-    }
-    journeyName = suggested.name;
-    category = suggested.category;
-    namingProvider = suggested.provider || null;
-    slugSource = namingProvider === 'fallback' ? 'fallback' : 'auto';
-    await assertUnknownJourney(slug);
-  }
-  // Ohne KI-Provider (Benennung per Offline-Rückfall) keine Extraktion
-  // versuchen — das Erstprodukt besteht dann nur aus Titel und Link.
-  const offline = !givenSlug && namingProvider === 'fallback';
-  let extracted = {};
-  let extractProvider = offline ? 'fallback' : null;
-  if (!offline) {
-    try {
-      // `?journey=` mitgeben: Der Extraktions-Prompt nennt die Kaufreise als
-      // Kontext — ohne den Param fiele das Backend auf "bike" zurück und die
-      // Extraktion würde in Richtung Fahrrad-Specs gezogen.
-      const submitted = await postJson(
-        `${BASE_URL}/api/parse-text?journey=${encodeURIComponent(slug)}`,
-        { text: content.text, link },
-      );
-      // Seit der Crawl-Queue antwortet der POST sofort mit 202 (`{ jobId }`);
-      // das Tool braucht das Item synchron und löst den Job per GET auf.
-      const parsed = submitted && submitted.jobId && !submitted.item
-        ? await awaitParseJob(submitted.jobId)
-        : submitted;
-      extracted = (parsed && parsed.item) || {};
-      extractProvider = (parsed && parsed.provider) || null;
-    } catch (err) {
-      if (/NO_EXTRACTOR/.test(err.message)) {
-        // Kein KI-Provider (aber Backend erreichbar): Offline-Erstprodukt
-        // aus Titel und Link statt Fehler. Echte Fehler (Auth, Crawl-Block,
-        // unerreichbares Backend) fallen unten durch und werfen.
-        extracted = {};
-        extractProvider = 'fallback';
-      } else {
-        throw new Error(`KI-Extraktion des Produkts ist fehlgeschlagen (${link}): ${err.message}`);
-      }
-    }
-  }
-  const name = givenName || String(extracted.name || '').trim() || content.title.trim();
-  if (!name) {
-    return toolResultError(
-      'Seite lieferte keinen Titel — bitte Parameter "name" für das erste Produkt angeben.'
-    );
-  }
-  try {
-    const body = { slug };
-    if (journeyName) body.name = journeyName;
-    if (category) body.category = category;
-    await postJson(`${BASE_URL}/api/journeys`, body);
-  } catch (err) {
-    if (/HTTP 409/.test(err.message)) {
-      throw new Error(
-        `Journey "${slug}" existiert bereits — nutze journey.add_item, um ein Produkt hinzuzufügen.`
-      );
-    }
-    throw new Error(`Journey "${slug}" konnte nicht angelegt werden: ${err.message}`);
-  }
-  const itemArgs = { slug, name, link };
-  if (price !== undefined) {
-    itemArgs.price = price;
-  } else if (extracted.price) {
-    itemArgs.price = extracted.price;
-  }
-  if (rating !== undefined) {
-    itemArgs.rating = rating;
-  } else if (countStars(extracted.rating) > 0) {
-    itemArgs.rating = countStars(extracted.rating);
-  }
-  if (status !== undefined) {
-    itemArgs.status = status;
-  } else if (ITEM_STATUSES.includes(extracted.status)) {
-    itemArgs.status = extracted.status;
-  }
-  if (notes !== undefined) {
-    itemArgs.notes = notes;
-  } else if (extracted.notes) {
-    itemArgs.notes = extracted.notes;
-  }
-  if (specs !== undefined) {
-    itemArgs.specs = specs;
-  } else {
-    const extractedSpecs = specsStringToObject(extracted.specs);
-    if (Object.keys(extractedSpecs).length > 0) {
-      itemArgs.specs = extractedSpecs;
-    }
-  }
-  const added = await handleAddItem({ name: 'journey.add_item', arguments: itemArgs });
-  const addedOut = JSON.parse(added.content[0].text);
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(
-          {
-            success: true,
-            slug,
-            name,
-            created: true,
-            item: addedOut.item,
-            ...(journeyName ? { journeyName } : {}),
-            ...(category ? { category } : {}),
-            slugSource,
-            ai: { naming: namingProvider, extraction: extractProvider },
-            source: { url: link, title: crawled.title, truncated },
-          },
-          null,
-          2
-        ),
-      },
-    ],
-  };
 }
 
 function jsonResult(payload) {
@@ -982,8 +669,6 @@ const TOOL_HANDLERS = {
   'journey.set_spec': (params) => handleSetSpec(params),
   'journey.delete_spec': (params) => handleDeleteSpec(params),
   'journey.set_feedback': (params) => handleSetFeedback(params),
-  'journey.crawl_link': (params) => handleCrawlLink(params),
-  'journey.create_from_link': (params) => handleCreateFromLink(params),
 };
 
 async function handleCall(params) {

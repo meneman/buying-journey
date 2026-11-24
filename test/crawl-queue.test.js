@@ -10,13 +10,13 @@ test('enqueue antwortet sofort mit Job, getJob liest ihn (fremder Owner → null
   const created = q.enqueue({
     owner: 'anna',
     journey: 'bike',
-    kind: 'parse-text',
+    kind: 'property-sync',
     spec: { text: 'x' },
     run: async () => ({ item: { name: 'Später' } }),
   });
   assert.equal(created.status, 'in progress');
   assert.equal(typeof created.jobId, 'string');
-  assert.equal(created.kind, 'parse-text');
+  assert.equal(created.kind, 'property-sync');
   assert.equal(created.journey, 'bike');
 
   const view = q.getJob(created.jobId, 'anna');
@@ -41,9 +41,9 @@ test('FIFO + Konkurrenz-Limit: max. 1 Läufer, Reihenfolge, Wartepositionen', as
     started.push(spec.n);
     return new Promise((resolve) => { releases[spec.n] = () => { parallel -= 1; resolve({ item: { name: spec.n } }); }; });
   };
-  const a = q.enqueue({ owner: 'anna', journey: 'bike', kind: 'import-link', spec: { n: 'a' }, run });
-  const b = q.enqueue({ owner: 'anna', journey: 'bike', kind: 'import-link', spec: { n: 'b' }, run });
-  const c = q.enqueue({ owner: 'anna', journey: 'bike', kind: 'import-link', spec: { n: 'c' }, run });
+  const a = q.enqueue({ owner: 'anna', journey: 'bike', kind: 'property-sync', spec: { n: 'a' }, run });
+  const b = q.enqueue({ owner: 'anna', journey: 'bike', kind: 'property-sync', spec: { n: 'b' }, run });
+  const c = q.enqueue({ owner: 'anna', journey: 'bike', kind: 'property-sync', spec: { n: 'c' }, run });
   await tick();
 
   assert.deepEqual(started, ['a']);
@@ -73,15 +73,15 @@ test('errored übernimmt message/code/status; onSettled feuert pro Job', async (
   const created = q.enqueue({
     owner: 'anna',
     journey: 'bike',
-    kind: 'import-link',
+    kind: 'property-sync',
     spec: {},
-    run: async () => { throw { status: 502, code: 'CONTENT_BLOCKED', message: 'Bot-Schutz' }; },
+    run: async () => { throw { status: 502, code: 'LLM_ERROR', message: 'Antwort ungültig' }; },
   });
   await tick();
   const view = q.getJob(created.jobId, 'anna');
   assert.equal(view.status, 'errored');
-  assert.equal(view.error, 'Bot-Schutz');
-  assert.equal(view.code, 'CONTENT_BLOCKED');
+  assert.equal(view.error, 'Antwort ungültig');
+  assert.equal(view.code, 'LLM_ERROR');
   assert.equal(view.statusCode, 502);
   assert.equal(settled.length, 1);
   assert.equal(settled[0][0].jobId, created.jobId);
@@ -94,7 +94,7 @@ test('done übernimmt item/provider/fetcher/meta', async () => {
   const created = q.enqueue({
     owner: 'anna',
     journey: 'bike',
-    kind: 'import-link',
+    kind: 'property-sync',
     spec: {},
     run: async () => ({ item: { name: 'Stub' }, provider: 'local-cmd', fetcher: 'local-cmd', meta: { textChars: 5 } }),
   });
@@ -111,7 +111,7 @@ test('fertige Jobs verfallen nach TTL (danach 404)', async () => {
   let t = 1000;
   const q = createCrawlQueue({ ttlMs: 500, now: () => t });
   const created = q.enqueue({
-    owner: 'anna', journey: 'bike', kind: 'parse-text', spec: {}, run: async () => ({ item: { name: 'X' } }),
+    owner: 'anna', journey: 'bike', kind: 'property-sync', spec: {}, run: async () => ({ item: { name: 'X' } }),
   });
   await tick();
   assert.equal(q.getJob(created.jobId, 'anna').status, 'done');

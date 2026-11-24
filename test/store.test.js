@@ -1,6 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 const { openDatabase, specsStringToJson, specsJsonToString } = require('../src/db/store.js');
 
 function memDb(t) {
@@ -173,24 +177,26 @@ test('feedback round-trips with a sensible default', async (t) => {
   assert.equal(store.getFeedback('bike', 'anna'), 'Eigene Notizen');
 });
 
-test('needsContent-Flag übersteht den Save/Get-Roundtrip (gesetzt und ungesetzt)', async (t) => {
-  const store = memDb(t);
-  store.saveJourneyData('bike', 'anna', {
+test('legacy items with needs_content column in SQLite remain readable', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bike-legacy-db-'));
+  const dbPath = path.join(dir, 'app.db');
+  const first = openDatabase(dbPath);
+  first.saveJourneyData('bike', 'anna', {
     status: {}, journey: [], specs: [], generalNotes: '',
-    items: [
-      { name: 'Blockiert-Auto', link: 'https://example.com/auto', needsContent: true },
-      { name: 'Normal-Bike', link: 'https://example.com/bike' },
-    ],
+    items: [{ name: 'Alt-Auto', link: 'https://example.com/auto' }],
   });
-  const items = store.getJourneyData('bike', 'anna').items;
-  assert.equal(items[0].needsContent, true);
-  assert.ok(!('needsContent' in items[1]), 'ungesetztes Flag darf nicht im Drahtformat auftauchen');
-  // Flag lässt sich durch erneutes Speichern ohne Flag wieder löschen.
-  store.saveJourneyData('bike', 'anna', {
-    status: {}, journey: [], specs: [], generalNotes: '',
-    items: [{ name: 'Blockiert-Auto', link: 'https://example.com/auto' }],
-  });
-  assert.ok(!('needsContent' in store.getJourneyData('bike', 'anna').items[0]));
+  first.close();
+
+  const raw = new DatabaseSync(dbPath);
+  raw.prepare("UPDATE items SET needs_content = 1 WHERE owner_id = 'anna' AND journey_slug = 'bike'").run();
+  raw.close();
+
+  const reopened = openDatabase(dbPath);
+  t.after(() => reopened.close());
+  const items = reopened.getJourneyData('bike', 'anna').items;
+  assert.equal(items.length, 1);
+  assert.equal(items[0].name, 'Alt-Auto');
+  assert.equal('needsContent' in items[0], false);
 });
 
 test('deleteJourney removes owner journey with cascade and leaves other owners untouched', (t) => {

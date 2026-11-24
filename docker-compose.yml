@@ -22,6 +22,3 @@ services:
       - SUPABASE_URL=${SUPABASE_URL:-https://epknwdxauctkdcwpsslh.supabase.co}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
       - AUTH_REQUIRED=${AUTH_REQUIRED:-false}
-      - CRAWL_FETCH_PROVIDER=${CRAWL_FETCH_PROVIDER:-direct}
-      - CRAWL_EXTRACT_PROVIDER=${CRAWL_EXTRACT_PROVIDER:-n8n}
-      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL:-}

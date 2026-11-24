@@ -3,8 +3,6 @@ const dotenv = require('dotenv');
 const path = require('path');
 const { openDatabase } = require('../../db/store.js');
 const { optionalAuth, requireUser } = require('./auth.js');
-const { checkImportLinkReady, checkParseTextReady, crawlProduct, fetchProductContent, listProviders, parseProductText, suggestJourneyCategory, toJourneyItem } = require('./crawl-providers.js');
-const { createCrawlQueue, readQueueConcurrency } = require('./crawl-queue.js');
 
 // Load environment variables
 dotenv.config();
@@ -96,37 +94,16 @@ function getJourney(req) {
 // reconnectet automatisch per `retry:` (kein manueller Reload als Dauerlösung).
 // Scope: `POST /api/data` broadcastet an die Clients derselben Journey
 // *desselben Owners* (Schlüssel `owner/slug` — kein User sieht fremde
-// Updates); fertige Crawl-Jobs (`POST /api/import-link`, `POST /api/parse-text`
-// via Queue-`onSettled`) ebenfalls. `POST /api/feedback`,
-// `PUT /api/journey-config` und `POST /api/journeys` bleiben bewusst draußen.
+// Updates). `POST /api/feedback`, `PUT /api/journey-config` und
+// `POST /api/journeys` bleiben bewusst draußen.
 const journeySseClients = new Map(); // "owner/slug" -> Set<ServerResponse>
 
 function sseChannel(owner, slug) {
   return `${owner}/${slug}`;
 }
 
-// Crawl-Job-Queue (In-Memory-FIFO, N parallele Läufer): `POST
-// /api/import-link` und `POST /api/parse-text` antworten sofort mit 202 und
-// lassen Fetch+LLM im Worker laufen. Fertige Records leben 1h (danach 404);
-// ein Neustart verwirft wartende/laufende Jobs (GET danach 404).
-// `onSettled` feuert pro fertigem Job den SSE-Broadcast an den Owner-Kanal.
-const crawlQueue = createCrawlQueue({
-  concurrency: readQueueConcurrency(),
-  // Fertiger Job → SSE an den Owner-Kanal (gleicher Event-Typ wie POST
-  // /api/data, mit Job-Feldern dazu; siehe broadcastJourneyUpdate).
-  onSettled: (job, { owner, journey }) => broadcastJourneyUpdate(owner, journey, {
-    jobId: job.jobId,
-    jobStatus: job.status,
-    ...(job.status === 'done' && job.item !== undefined ? { item: job.item } : {}),
-    ...(job.status === 'errored'
-      ? { error: job.error, ...(job.code !== undefined ? { code: job.code } : {}) }
-      : {}),
-  }),
-});
-
-// `extra` hängt optionale Felder an (Job-Fertigstellung: `jobId, jobStatus,
-// item?/error?/code?`); der `POST /api/data`-Pfad ruft ohne `extra` auf und
-// bleibt `{slug, updatedAt}`.
+// `extra` hängt optionale Event-Felder an; der `POST /api/data`-Pfad ruft ohne
+// `extra` auf und bleibt `{slug, updatedAt}`.
 function broadcastJourneyUpdate(owner, slug, extra) {
   const clients = journeySseClients.get(sseChannel(owner, slug));
   if (!clients || clients.size === 0) return;
@@ -379,171 +356,6 @@ app.post('/api/data', needUser, (req, res) => {
   }
 });
 
-// Verfügbare Crawl-Provider mit Konfigurationsstatus (für das
-// Provider-Dropdown im Frontend). Öffentlich lesbar wie `/api/config`? Nein:
-// bewusst hinter `needUser`, weil die Namen konfigurierter interner
-// Endpunkte sonst ausgeloggt sichtbar wären.
-app.get('/api/crawl-providers', needUser, (req, res) => {
-  try {
-    res.json(listProviders());
-  } catch (error) {
-    console.error('API Crawl-Providers Error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Legt einen Crawl+LLM-Auftrag als Queue-Job an (zwei Stufen: Inhalt parsen,
-// dann mit LLM auswerten; siehe `src/web/backend/crawl-providers.js`) und
-// antwortet sofort mit 202 — der Main-Call blockiert nicht mehr (bis 60s
-// `CRAWL_TIMEOUT_MS`). `{ provider }` wählt die LLM-Auswertung, `{ fetcher }`
-// das Parse-Tool. Prüfbare Fehler (400/500/501) kommen weiterhin synchron;
-// Laufzeitfehler (Fetch, LLM, `CONTENT_BLOCKED`) werden `errored`-Jobs.
-// Speichert nichts selbst — das Frontend persistiert bei `done` direkt.
-app.post('/api/import-link', needUser, (req, res) => {
-  const journey = getJourney(req);
-  const { link, provider, fetcher } = req.body || {};
-
-  try {
-    checkImportLinkReady({ url: link, provider, fetcher });
-  } catch (error) {
-    if (error && typeof error.status === 'number') {
-      return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
-    }
-    console.error('API Import-Link Error:', error);
-    return res.status(500).json({ error: error && error.message ? error.message : String(error) });
-  }
-  const job = crawlQueue.enqueue({
-    owner: req.user.id,
-    journey,
-    kind: 'import-link',
-    spec: { url: link, journey, provider, fetcher },
-    run: async (spec) => {
-      const { raw, provider: used, fetcher: fetchUsed, meta } = await crawlProduct(spec);
-      const item = toJourneyItem(raw, spec.url);
-      console.log(
-        `[import-link] journey=${spec.journey} item=${JSON.stringify(item.name)} provider=${used} fetcher=${fetchUsed || 'kombiniert'}` +
-        `${meta && meta.fallbackFrom ? ` fallback=${meta.fallbackFrom}->${fetchUsed}` : ''}` +
-        ` fetchMs=${meta ? meta.fetchMs : '?'} extractMs=${meta ? meta.extractMs : '?'} text=${meta ? meta.textChars : '?'}ch` +
-        ` specs=${item.specs ? 'ja' : 'nein'} preis=${item.price ? 'ja' : 'nein'}`,
-      );
-      return { item, provider: used, fetcher: fetchUsed, meta: meta || null };
-    },
-  });
-  res.status(202).json(job);
-});
-
-// Parst manuell eingefügten Seiteninhalt (Fallback, wenn der Auto-Crawl
-// blockiert war) als Queue-Job — ohne Fetch-Stufe, Antwort sofort 202.
-// `{ text }` ist Pflicht, `{ link }` optional (wird als Item-Link
-// übernommen), `{ provider }` wählt die Auswertung ("agy", "remote-ai",
-// "local-cmd"; Default wie /api/import-link). Speichert nichts — das Frontend
-// persistiert das Item bei `done` selbst.
-app.post('/api/parse-text', needUser, (req, res) => {
-  const journey = getJourney(req);
-  const { text, link, provider } = req.body || {};
-
-  try {
-    checkParseTextReady({ text, link, provider });
-  } catch (error) {
-    if (error && typeof error.status === 'number') {
-      return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
-    }
-    console.error('API Parse-Text Error:', error);
-    return res.status(500).json({ error: error && error.message ? error.message : String(error) });
-  }
-  const job = crawlQueue.enqueue({
-    owner: req.user.id,
-    journey,
-    kind: 'parse-text',
-    spec: { text, link, journey, provider },
-    run: async (spec) => {
-      const { raw, provider: used, meta } = await parseProductText(spec);
-      const item = toJourneyItem(raw, typeof spec.link === 'string' ? spec.link : '');
-      console.log(
-        `[parse-text] journey=${spec.journey} item=${JSON.stringify(item.name)} provider=${used}` +
-        ` extractMs=${meta.extractMs} text=${meta.textChars}ch` +
-        ` specs=${item.specs ? 'ja' : 'nein'} preis=${item.price ? 'ja' : 'nein'}`,
-      );
-      return { item, provider: used, meta };
-    },
-  });
-  res.status(202).json(job);
-});
-
-// Liest einen Crawl-Job (für Reload/Reconnect nach 202): `in progress` mit
-// Warteposition, `done` mit Item, `errored` mit Fehlertext. Owner-isoliert —
-// fremde/unbekannte/abgelaufene Jobs antworten 404 (Neustart verwirft Jobs).
-app.get('/api/import-jobs/:id', needUser, (req, res) => {
-  const job = crawlQueue.getJob(req.params.id, req.user.id);
-  if (!job) {
-    return res.status(404).json({ error: 'Job nicht gefunden (unbekannt, abgelaufen oder nach Neustart verworfen).' });
-  }
-  res.json(job);
-});
-
-// Lädt den Inhalt einer URL und gibt { url, title, text, truncated, fetcher, fallbackFrom, fetchMs } zurück.
-// Ermöglicht schlanken Clients (z.B. MCP-Server ohne eigenes Puppeteer/Browser),
-// das serverseitige Crawling (direct mit headless-Fallback) zu nutzen.
-app.post('/api/crawl-link', needUser, async (req, res) => {
-  const { link, url, maxChars, fetcher } = req.body || {};
-  const targetUrl = link ?? url;
-  const max = typeof maxChars === 'number' && maxChars > 0 ? Math.min(Math.floor(maxChars), 50000) : 20000;
-
-  try {
-    const journey = getJourney(req);
-    const content = await fetchProductContent({ url: targetUrl, journey, fetcher });
-    const truncated = content.text.length > max;
-    const text = truncated ? content.text.slice(0, max) : content.text;
-    res.json({
-      url: content.url,
-      title: content.title,
-      text,
-      truncated,
-      fetcher: content.fetcher,
-      fallbackFrom: content.fallbackFrom || null,
-      fetchMs: content.fetchMs,
-    });
-  } catch (error) {
-    if (error && typeof error.status === 'number') {
-      return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
-    }
-    console.error('API Crawl-Link Error:', error);
-    res.status(500).json({ error: error && error.message ? error.message : String(error) });
-  }
-});
-
-// Benennt eine Journey (Verallgemeinerung des Produkts) — ohne Fetch, ohne
-// Speichern. `{ url|link, title, text }` liefert bereits geparsten Inhalt
-// (z.B. aus dem MCP-Crawl), `{ provider }` wählt die Auswertung ("agy",
-// "remote-ai", "local-cmd"; Default wie /api/import-link). Mit Provider
-// folgt die Benennung immer src/agent/prompts/journey_naming_prompt.md,
-// ohne gibt es einen markierten Offline-Rückfall (`provider: "fallback"`).
-// Antwort: `{ slug, name, category, provider, meta }`. Speichert nichts —
-// der Aufrufer (MCP `journey.create_from_link`) legt die Journey selbst an.
-app.post('/api/suggest-journey', needUser, async (req, res) => {
-  const { url, link, title, text, provider } = req.body || {};
-
-  try {
-    const { naming, provider: used, meta } = await suggestJourneyCategory({
-      url: url ?? link,
-      title,
-      text,
-      provider,
-    });
-    console.log(
-      `[suggest-journey] slug=${naming.slug} name=${JSON.stringify(naming.name)} provider=${used}` +
-      ` extractMs=${meta.extractMs} text=${meta.textChars}ch`,
-    );
-    res.json({ slug: naming.slug, name: naming.name, category: naming.category, provider: used, meta });
-  } catch (error) {
-    if (error && typeof error.status === 'number') {
-      return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
-    }
-    console.error('API Suggest-Journey Error:', error);
-    res.status(500).json({ error: error && error.message ? error.message : String(error) });
-  }
-});
-
 app.get('/api/feedback', needUser, (req, res) => {
   const journey = getJourney(req);
   try {
@@ -570,10 +382,11 @@ app.post('/api/feedback', needUser, (req, res) => {
 });
 
 // SPA fallback: let the React router handle any other GET route
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
 app.get('*', (req, res) => {
-  if (req.path.startsWith('/api/')) {
-    return res.status(404).json({ error: 'Not found' });
-  }
   res.sendFile(path.join(FRONTEND_DIST, 'index.html'), (err) => {
     if (err && !res.headersSent) {
       res.status(404).json({ error: 'Frontend wurde noch nicht gebaut (frontend/dist fehlt).' });

@@ -1,13 +1,12 @@
-// In-Memory-FIFO-Queue mit begrenzt parallelen Läufern für langsame
-// Crawl+LLM-Jobs (`POST /api/import-link`, `POST /api/parse-text`).
+// In-Memory-FIFO-Queue mit begrenzt parallelen Läufern für asynchrone
+// Hintergrund-LLM-Jobs (z.B. serverseitiger Property-Abgleich).
 //
 // Warum kein Framework: keine neue Dependency, kein Redis — die LLM-Last ist
-// Subprozess-/Netzwerk-gebunden (agy-CLI via `execFile`, Fetch), daher genügen
-// N parallele Läufer im Backend-Prozess. Neustart-Verlust ist akzeptiert
-// (siehe Karte): wartende/laufende Jobs sind danach weg, `GET` antwortet 404.
+// Subprozess-/Netzwerk-gebunden (agy-CLI via `execFile`, HTTP-Fetch), daher
+// genügen N parallele Läufer im Backend-Prozess. Neustart-Verlust ist
+// akzeptiert: wartende/laufende Jobs sind danach weg, `GET` antwortet 404.
 //
-// Statuswerte: "in progress" | "done" | "errored" (exakt diese Strings sieht
-// auch das Frontend in der ProductCard).
+// Statuswerte: "in progress" | "done" | "errored".
 const { randomUUID } = require('node:crypto');
 
 const DEFAULT_CONCURRENCY = 2;
@@ -20,11 +19,10 @@ function readQueueConcurrency() {
 }
 
 /**
- * Erzeugt eine Queue. `run` ist die Job-Funktion (wird von server.js mit
- * `crawlProduct`/`parseProductText` verdrahtet) und bekommt das Spec-Objekt
+ * Erzeugt eine Queue. `run` ist die Job-Funktion und bekommt das Spec-Objekt
  * aus `enqueue`; bei Erfolg löst sie mit dem Ergebnis auf, bei Fehler wirft
  * sie `{ status?, code?, message }`. `onSettled(publicView, { owner, journey })`
- * feuert bei `done`/`errored` (server.js hängt dort den SSE-Broadcast ein).
+ * feuert bei `done`/`errored` (z.B. für den SSE-Broadcast).
  */
 function createCrawlQueue({ concurrency = DEFAULT_CONCURRENCY, ttlMs = DEFAULT_TTL_MS, now = Date.now, onSettled } = {}) {
   const limit = Number.isFinite(concurrency) && concurrency >= 1 ? Math.floor(concurrency) : DEFAULT_CONCURRENCY;

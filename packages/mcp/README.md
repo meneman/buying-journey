@@ -2,12 +2,12 @@
 
 Lightweight, zero-dependency Model Context Protocol (MCP) server for [JourneyPath](https://github.com/jakob/buying-journey).
 
-Allows Claude Desktop, Cursor, Zed, Muse, and other MCP clients to query buying journeys, add products with automatic upserting, crawl product pages, and create entire journeys from product URLs.
+Allows Claude Desktop, Cursor, Zed, Muse, and other MCP clients to create and manage buying journeys, add or update products with structured specs, maintain logs, and write feedback.
 
 ## Features
 
 - **0 external dependencies**: Runs with vanilla Node.js 18+. No Puppeteer, no native modules.
-- **Remote delegation**: All scraping, LLM classification, and storage is delegated to your JourneyPath server.
+- **Client-first research**: Your AI client handles web search and extraction using its own tools and passes structured data directly via MCP CRUD tools.
 - **Secure**: Authenticates via API keys (`MCP_AUTH_TOKEN`) — strictly scoped to your user data.
 
 ## Installation / Usage
@@ -40,7 +40,17 @@ Add this to your MCP configuration file (e.g. `claude_desktop_config.json`):
 
 ## Tools Provided
 
-- `journey.get`: Read full journey document (items, specs, logs, feedback, notes).
+- `journey.help`: Compact guide to all available tools, workflows, enums, and spec conventions.
+- `journey.list`: List all buying journeys for the authenticated user.
+- `journey.create`: Create a new buying journey (`slug` required, optional metadata/config).
+- `journey.update_config`: Partially update base properties and display settings of a journey.
+- `journey.delete`: Delete a journey and all its items, logs, and specs.
+- `journey.get`: Read full journey document (items, specs, logs, feedback, notes, config).
 - `journey.add_item`: Add or update a product item (case-insensitive upsert).
-- `journey.crawl_link`: Crawl a product page via backend and return title + text.
-- `journey.create_from_link`: Create a brand new journey and extract initial product via AI.
+- `journey.delete_item`: Remove a product item by name.
+- `journey.update_meta`: Update phase, budget, target date, and general notes.
+- `journey.add_log`: Add a milestone entry to the journey log.
+- `journey.delete_log`: Remove a log entry by index or event text.
+- `journey.set_spec`: Add or update a journey-wide property (`/eigenschaften`).
+- `journey.delete_spec`: Remove a journey-wide property by label.
+- `journey.set_feedback`: Save markdown content for `/feedback`.

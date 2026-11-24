@@ -232,17 +232,18 @@ test('POST /api/feedback requires a string content field', async (t) => {
   }
 });
 
-test('POST /api/import-link validates the link before any network use', async (t) => {
+test('removed crawl endpoints answer JSON 404', async (t) => {
   const base = await startApp(t);
-  const cases = [
-    [{}, 'missing link'],
-    [{ link: 42 }, 'non-string link'],
-    [{ link: 'keine-url' }, 'malformed URL'],
-    [{ link: 'ftp://example.com/produkt' }, 'non-http(s) URL'],
-  ];
-  for (const [body, label] of cases) {
-    const res = await postJson(base, '/api/import-link?journey=bike', body);
-    assert.equal(res.status, 400, `expected 400 for ${label}`);
+  const getRoutes = ['/api/crawl-providers', '/api/import-jobs/abc'];
+  for (const urlPath of getRoutes) {
+    const res = await getAuthed(base, urlPath);
+    assert.equal(res.status, 404, `expected 404 for GET ${urlPath}`);
+    assert.equal(typeof (await res.json()).error, 'string');
+  }
+  const postRoutes = ['/api/import-link?journey=bike', '/api/parse-text?journey=bike', '/api/crawl-link', '/api/suggest-journey'];
+  for (const urlPath of postRoutes) {
+    const res = await postJson(base, urlPath, { link: 'https://example.com' });
+    assert.equal(res.status, 404, `expected 404 for POST ${urlPath}`);
     assert.equal(typeof (await res.json()).error, 'string');
   }
 });
@@ -351,42 +352,6 @@ test('POST /api/journeys accepts base properties as config defaults', async (t) 
   assert.equal(config.name, 'Notebook');
   assert.equal(config.description, 'Arbeit + Freizeit');
   assert.equal(config.category, 'laptop');
-});
-
-test('POST /api/crawl-link rejects unauthorized requests with 401', async (t) => {
-  const base = await startApp(t);
-  const res = await fetch(`${base}/api/crawl-link`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ link: 'https://example.com/item' }),
-  });
-  assert.equal(res.status, 401);
-});
-
-test('POST /api/crawl-link validates URLs', async (t) => {
-  const base = await startApp(t);
-  for (const body of [{ link: '' }, { link: 'not-a-url' }, { link: 'ftp://example.com' }]) {
-    const res = await postJson(base, '/api/crawl-link', body);
-    assert.equal(res.status, 400);
-  }
-});
-
-test('POST /api/crawl-link fetches and returns content via custom fetcher', async (t) => {
-  const base = await startApp(t, {
-    CRAWL_FETCH_CMD: `printf '%s' '{"title":"Test Item","text":"Hello world specification text"}'`,
-  });
-  const res = await postJson(base, '/api/crawl-link', {
-    link: 'https://example.com/test',
-    fetcher: 'local-cmd',
-    maxChars: 11,
-  });
-  assert.equal(res.status, 200);
-  const body = await res.json();
-  assert.equal(body.url, 'https://example.com/test');
-  assert.equal(body.title, 'Test Item');
-  assert.equal(body.text, 'Hello world');
-  assert.equal(body.truncated, true);
-  assert.equal(body.fetcher, 'local-cmd');
 });
 
 test('GET /api/mcp-status includes packageName and server info', async (t) => {
