@@ -223,3 +223,51 @@ test('deleteJourney removes owner journey with cascade and leaves other owners u
   assert.deepEqual(store.listJourneys('benni'), ['bike']);
   assert.deepEqual(store.getJourneyData('bike', 'benni').items.map((i) => i.name), ['Bennis Rad']);
 });
+
+test('applySpecAlignment speichert specComparison mit Hash-Schutz und ohne Nebenwirkungen', (t) => {
+  const store = memDb(t);
+  store.saveJourneyData('bike', 'anna', {
+    status: { phase: 'Comparing' },
+    journey: [],
+    specs: [],
+    generalNotes: '',
+    items: [
+      { name: 'Rad A', specs: 'Weight: 15 kg <br> Top-Gabel' },
+      { name: 'Rad B', specs: 'Gewicht: 14 kg' },
+    ],
+  });
+  const snap = store.getItemsSnapshot('bike', 'anna');
+  assert.equal(snap.exists, true);
+
+  // Falscher Hash wird abgelehnt (schützt neuere Edits).
+  const stale = store.applySpecAlignment('bike', 'anna', {
+    expectedItemsHash: 'veralteter-hash',
+    updatedSpecsByIndex: ['X: 1', 'X: 2'],
+    specComparison: { commonKeys: ['X'], uniqueKeys: [] },
+  });
+  assert.deepEqual(stale, { applied: false, reason: 'stale' });
+
+  // Passender Hash übernimmt vereinheitlichte Specs + Vergleichsstruktur.
+  const ok = store.applySpecAlignment('bike', 'anna', {
+    expectedItemsHash: snap.hash,
+    updatedSpecsByIndex: ['Gewicht: 15 kg <br> Top-Gabel', 'Gewicht: 14 kg'],
+    specComparison: { commonKeys: ['Gewicht'], uniqueKeys: [], updatedAt: '2026-11-24T12:00:00.000Z' },
+  });
+  assert.deepEqual(ok, { applied: true, changedSpecs: true });
+
+  const doc = store.getJourneyData('bike', 'anna');
+  assert.equal(doc.items[0].specs, 'Gewicht: 15 kg <br> Top-Gabel');
+  assert.deepEqual(doc.specComparison, {
+    commonKeys: ['Gewicht'],
+    uniqueKeys: [],
+    updatedAt: '2026-11-24T12:00:00.000Z',
+  });
+
+  // preserveSpecComparison=true behält specComparison bei reinem Notiz-Update.
+  store.saveJourneyData('bike', 'anna', { ...doc, generalNotes: 'Neu' }, { preserveSpecComparison: true });
+  assert.deepEqual(store.getJourneyData('bike', 'anna').specComparison, {
+    commonKeys: ['Gewicht'],
+    uniqueKeys: [],
+    updatedAt: '2026-11-24T12:00:00.000Z',
+  });
+});

@@ -11,11 +11,18 @@ const { randomUUID } = require('node:crypto');
 
 const DEFAULT_CONCURRENCY = 2;
 const DEFAULT_TTL_MS = 3600000; // fertige Records leben 1h, danach 404
+const DEFAULT_DEBOUNCE_MS = 300;
 
 /** Liest `CRAWL_QUEUE_CONCURRENCY` (Default 2, min. 1). */
 function readQueueConcurrency() {
   const raw = Number(process.env.CRAWL_QUEUE_CONCURRENCY);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_CONCURRENCY;
+}
+
+/** Liest `SPEC_ALIGNMENT_DEBOUNCE_MS` (Default 300, min. 0). */
+function readAlignmentDebounceMs() {
+  const raw = Number(process.env.SPEC_ALIGNMENT_DEBOUNCE_MS);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_DEBOUNCE_MS;
 }
 
 /**
@@ -28,6 +35,9 @@ function createCrawlQueue({ concurrency = DEFAULT_CONCURRENCY, ttlMs = DEFAULT_T
   const limit = Number.isFinite(concurrency) && concurrency >= 1 ? Math.floor(concurrency) : DEFAULT_CONCURRENCY;
   const jobs = new Map(); // id -> Record
   const waiting = []; // ids, FIFO
+  const pendingTimers = new Map(); // key -> { timer, token }
+  const latestTokens = new Map(); // key -> token
+  let seq = 0;
   let running = 0;
 
   function sweep() {
@@ -112,7 +122,7 @@ function createCrawlQueue({ concurrency = DEFAULT_CONCURRENCY, ttlMs = DEFAULT_T
 
   return {
     /** Legt einen Job an ({ owner, journey, kind, spec, run }) und gibt die 202-Antwort zurück. */
-    enqueue({ owner, journey, kind, spec, run }) {
+    enqueue({ owner, journey, kind, spec, run, debounceKey }) {
       sweep();
       const record = {
         id: randomUUID(),
@@ -121,6 +131,7 @@ function createCrawlQueue({ concurrency = DEFAULT_CONCURRENCY, ttlMs = DEFAULT_T
         kind,
         spec,
         run,
+        debounceKey: debounceKey || null,
         status: 'in progress',
         outcome: null,
         createdAt: now(),
@@ -133,6 +144,54 @@ function createCrawlQueue({ concurrency = DEFAULT_CONCURRENCY, ttlMs = DEFAULT_T
       pump();
       return publicView(record);
     },
+    /**
+     * Plant einen debounced Job pro `key` (z.B. `owner/slug`): Neuere Aufrufe
+     * ersetzen ausstehende Timer und noch wartende Jobs (Latest-wins), ohne
+     * bereits laufende Jobs abzubrechen. `run` erhält `(spec, { isLatest })`.
+     */
+    scheduleDebounced({ key, owner, journey, kind, spec, debounceMs = DEFAULT_DEBOUNCE_MS, run }) {
+      const token = ++seq;
+      latestTokens.set(key, token);
+
+      const prevTimer = pendingTimers.get(key);
+      if (prevTimer) {
+        clearTimeout(prevTimer.timer);
+        pendingTimers.delete(key);
+      }
+
+      for (let i = waiting.length - 1; i >= 0; i--) {
+        const waitingId = waiting[i];
+        const waitingRecord = jobs.get(waitingId);
+        if (waitingRecord && waitingRecord.debounceKey === key) {
+          waiting.splice(i, 1);
+          jobs.delete(waitingId);
+        }
+      }
+
+      const startJob = () => {
+        if (latestTokens.get(key) !== token) return null;
+        return this.enqueue({
+          owner,
+          journey,
+          kind,
+          spec,
+          debounceKey: key,
+          run: (jobSpec) => run(jobSpec, { isLatest: () => latestTokens.get(key) === token }),
+        });
+      };
+
+      const delay = Number.isFinite(debounceMs) && debounceMs > 0 ? Math.floor(debounceMs) : 0;
+      if (delay === 0) {
+        return startJob();
+      }
+      const timer = setTimeout(() => {
+        pendingTimers.delete(key);
+        startJob();
+      }, delay);
+      if (timer.unref) timer.unref();
+      pendingTimers.set(key, { timer, token });
+      return null;
+    },
     /** Liest einen Job (nur eigener Owner; abgelaufene/fehlende → null = 404). */
     getJob(id, owner) {
       const record = jobs.get(id);
@@ -143,7 +202,22 @@ function createCrawlQueue({ concurrency = DEFAULT_CONCURRENCY, ttlMs = DEFAULT_T
       }
       return publicView(record);
     },
+    /** Bricht alle wartenden Debounce-Timer ab (z.B. beim Herunterfahren). */
+    dispose() {
+      for (const entry of pendingTimers.values()) {
+        clearTimeout(entry.timer);
+      }
+      pendingTimers.clear();
+      waiting.length = 0;
+    },
   };
 }
 
-module.exports = { createCrawlQueue, readQueueConcurrency, DEFAULT_CONCURRENCY, DEFAULT_TTL_MS };
+module.exports = {
+  createCrawlQueue,
+  readQueueConcurrency,
+  readAlignmentDebounceMs,
+  DEFAULT_CONCURRENCY,
+  DEFAULT_TTL_MS,
+  DEFAULT_DEBOUNCE_MS,
+};

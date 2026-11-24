@@ -135,3 +135,29 @@ test('readQueueConcurrency: Default 2, min. 1, Env-Override', () => {
     else process.env.CRAWL_QUEUE_CONCURRENCY = prev;
   }
 });
+
+test('scheduleDebounced fasst schnelle Aufrufe zusammen (Latest-wins) und gibt isLatest weiter', async () => {
+  const q = createCrawlQueue({ concurrency: 1 });
+  const runs = [];
+  q.scheduleDebounced({
+    key: 'anna/bike',
+    owner: 'anna',
+    journey: 'bike',
+    kind: 'property-sync',
+    debounceMs: 25,
+    spec: { version: 1 },
+    run: async (spec) => { runs.push(spec.version); },
+  });
+  q.scheduleDebounced({
+    key: 'anna/bike',
+    owner: 'anna',
+    journey: 'bike',
+    kind: 'property-sync',
+    debounceMs: 25,
+    spec: { version: 2 },
+    run: async (spec, { isLatest }) => { runs.push(`${spec.version}:${isLatest()}`); },
+  });
+  await new Promise((r) => setTimeout(r, 80));
+  assert.deepEqual(runs, ['2:true']);
+  q.dispose();
+});

@@ -1,15 +1,16 @@
-# Manuelle Tests — MCP-Client-First bereinigen (2026-11-24)
+# Manuelle Browser-Verifikation: Server-KI-Abgleich für Item-Properties (`specs`)
 
-Bitte `npm run dev` selbst starten (Backend auf Port `3000`, Vite-Dev-Server auf Port `3300`, `/api`-Aufrufe werden proxied).
-Danach im Browser anmelden und die folgenden Punkte prüfen:
+**Datum:** 2026-11-24
 
-## `/mcp`-Seite (http://localhost:3300/mcp)
+> Hinweis: Vor dem Testen den Dev-Stack selbst starten (`npm run dev` — Backend auf Port `3000`, Vite-Dev-Server auf Port `3300`), dann `http://localhost:3300` im Browser öffnen (`/api`-Calls werden per Proxy ans Backend geleitet).
 
-- [ ] Unter „4. Server-Status & Verfügbare Tools“ ist der Status grün (`Backend erreichbar`).
-- [ ] In der Tool-Liste erscheinen ausschließlich die 14 verbleibenden Tools (`journey.help`, `journey.list`, `journey.create`, `journey.update_config`, `journey.delete`, `journey.get`, `journey.add_item`, `journey.delete_item`, `journey.update_meta`, `journey.add_log`, `journey.delete_log`, `journey.set_spec`, `journey.delete_spec`, `journey.set_feedback`).
-- [ ] Die entfernten Crawl-Tools `journey.crawl_link` und `journey.create_from_link` tauchen nirgends mehr in der Tool-Liste auf.
+## Checkliste
 
-## Bestehende Daten & Produktkarten (`/` bzw. `/?journey=<slug>`)
-
-- [ ] Bestehende Kaufreisen aus `data/app.db` laden ohne Fehler im Dashboard (`/?journey=bike` o. ä.) und in der Vergleichsansicht (`/vergleich`).
-- [ ] Produktkarten rendern normal (ohne `needsContent`-Sonderzustand oder Fehlermeldungen in der Browser-Konsole).
+- [ ] **Weniger als 2 Items (Edge Case):** Eine Journey mit nur 1 Item auf `/vergleich?journey=<slug>` öffnen. Prüfen, dass die Specs normal als Zeilen angezeigt werden und **keine** Bereichs-Überschriften („Gemeinsame Eigenschaften“ / „Weitere / Einzel-Eigenschaften“) erscheinen.
+- [ ] **Items ohne Specs (Edge Case):** Zwei Produkte ohne `specs` anlegen und `/vergleich?journey=<slug>` öffnen. Prüfen, dass keine leeren Spec-Bereiche gerendert werden.
+- [ ] **Aufteilung in Gemeinsame vs. Einzel-Eigenschaften (Deterministischer Fallback ohne LLM):** Zwei Produkte mit teilweise überlappenden Specs anlegen (z. B. Produkt 1: `Gewicht: 15 kg`, `Akku: 625 Wh`; Produkt 2: `gewicht: 14 kg`, `Farbe: Grün`). Prüfen, dass auf `/vergleich?journey=<slug>` zwei klar beschriftete Bereiche erscheinen: **Gemeinsame Eigenschaften** (`Gewicht` — case-insensitiv zusammengeführt) und **Weitere / Einzel-Eigenschaften** (`Akku`, `Farbe`).
+- [ ] **KI-Synonyme & SSE-Live-Sync (mit konfiguriertem LLM-Provider, z. B. `agy`, `remote-ai` oder `CRAWL_EXTRACT_CMD`):** Ein zweites Produkt mit synonymem Spec-Key (z. B. `Weight: 15.2 kg` vs. `Gesamtgewicht: 14.1 kg`) per Web-UI oder MCP `journey.add_item` hinzufügen, während `/vergleich?journey=<slug>` im Browser offen ist:
+  - [ ] Das Speichern antwortet sofort ohne Wartezeit auf das LLM.
+  - [ ] Nach Abschluss des Hintergrund-Jobs erscheint ein SSE-Toast (**„Eigenschaften abgeglichen“**) mit Button **„Neu laden“** (ohne laufende Edits still zu überschreiben).
+  - [ ] Nach Klick auf **„Neu laden“** werden die vereinheitlichten Spec-Keys unter **Gemeinsame Eigenschaften** einsortiert; Originalwerte und eventuelle Freitext-Specs bleiben unverändert.
+- [ ] **Stiller Fallback bei Fehler:** Ungültigen/fehlerhaften Provider setzen (z. B. `CRAWL_EXTRACT_PROVIDER=local-cmd` und `CRAWL_EXTRACT_CMD="exit 1"`). Beim Speichern von 2 Items darf im Browser keine Fehlermeldung erscheinen; die Vergleichstabelle bleibt mit der deterministischen Gruppierung nutzbar.

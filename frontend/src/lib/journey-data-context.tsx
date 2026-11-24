@@ -78,15 +78,20 @@ function useJourneyDataState(journey: string): JourneyDataContextValue {
         }
         const current = source
         current.addEventListener(JOURNEY_UPDATED_EVENT, (event) => {
+          let reason: string | undefined
           try {
-            const payload = JSON.parse((event as MessageEvent).data) as { slug?: string }
+            const payload = JSON.parse((event as MessageEvent).data) as { slug?: string; reason?: string }
             if (payload.slug && payload.slug !== journey) return
+            reason = payload.reason
           } catch {
             // Unparsbar: trotzdem Toast zeigen
           }
-          toast.info('Neue Daten vom MCP-Server', {
+          const isPropertySync = reason === 'property-sync'
+          toast.info(isPropertySync ? 'Eigenschaften abgeglichen' : 'Neue Daten vom MCP-Server', {
             id: toastId,
-            description: 'Die geöffnete Journey wurde extern geändert.',
+            description: isPropertySync
+              ? 'Synonyme Spec-Keys und Gemeinsamkeiten wurden aktualisiert.'
+              : 'Die geöffnete Journey wurde extern geändert.',
             action: {
               label: 'Neu laden',
               onClick: () => {

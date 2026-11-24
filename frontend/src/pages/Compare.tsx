@@ -29,7 +29,7 @@ import { ProductDialog } from '@/components/ProductDialog'
 import { RatingDialog } from '@/components/RatingDialog'
 import { StarRatingDisplay } from '@/components/StarRating'
 import { useJourneyData } from '@/lib/journey-data-context'
-import { iconForSpecKey, parseSpecsString } from '@/lib/spec-icons'
+import { groupSpecKeys, iconForSpecKey, parseSpecsString } from '@/lib/spec-icons'
 import { statusBadgeClass } from '@/lib/status-style'
 import { parseRating, translateStatus, type JourneyItem } from '@/lib/types'
 
@@ -79,19 +79,22 @@ export function Compare() {
     mutate((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }), `„${name}" gelöscht`)
   }
 
-  const specKeys: string[] = []
-  for (const item of items) {
-    for (const part of parseSpecsString(item.specs)) {
-      if (part.key && !specKeys.includes(part.key)) specKeys.push(part.key)
-    }
-  }
+  const { split, commonKeys, uniqueKeys, allKeys } = groupSpecKeys(items, data.specComparison)
 
   function findSpecValue(item: JourneyItem, key: string): string {
     const match = parseSpecsString(item.specs).find((p) => p.key?.toLowerCase() === key.toLowerCase())
     return match?.value ?? '—'
   }
 
-  const attributes: Attribute[] = [
+  function specAttribute(key: string): Attribute {
+    return {
+      label: key,
+      icon: iconForSpecKey(key),
+      render: (item: JourneyItem) => <ExpandableText text={findSpecValue(item, key)} className="text-sm" />,
+    }
+  }
+
+  const baseAttributes: Attribute[] = [
     { label: 'Name', icon: faCompass, render: (item) => <ExpandableText text={item.name} className="font-medium" /> },
     { label: 'Preis', icon: faEuroSign, render: (item) => <span className="font-mono text-celeste">{item.price || 'k.A.'}</span> },
     {
@@ -110,12 +113,45 @@ export function Compare() {
         </button>
       ),
     },
-    ...specKeys.map((key) => ({
-      label: key,
-      icon: iconForSpecKey(key),
-      render: (item: JourneyItem) => <ExpandableText text={findSpecValue(item, key)} className="text-sm" />,
-    })),
   ]
+
+  function renderAttributeRows(attrs: Attribute[], keyPrefix: string) {
+    return attrs.map((attr) => (
+      <TableRow key={`${keyPrefix}-${attr.label}`}>
+        <TableCell className="w-48 bg-muted/50 font-medium text-foreground">
+          <div className="flex items-center gap-2">
+            <FontAwesomeIcon icon={attr.icon} className="size-4 text-steel" />
+            {attr.label}
+          </div>
+        </TableCell>
+        {items.map((item, index) => (
+          <TableCell key={index} className="min-w-48 max-w-[300px] w-[300px] align-top whitespace-normal">
+            <div className="max-w-[300px]">
+              {attr.render(item, index)}
+            </div>
+          </TableCell>
+        ))}
+      </TableRow>
+    ))
+  }
+
+  function renderSectionHeader(title: string, count: number) {
+    return (
+      <TableRow className="hover:bg-transparent">
+        <TableCell
+          colSpan={items.length + 1}
+          className="bg-muted/70 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+        >
+          <div className="flex items-center gap-2">
+            <span>{title}</span>
+            <Badge variant="secondary" className="text-[11px] font-normal">
+              {count}
+            </Badge>
+          </div>
+        </TableCell>
+      </TableRow>
+    )
+  }
 
   return (
     <div>
@@ -142,23 +178,25 @@ export function Compare() {
         <div className="overflow-x-auto rounded-xl border border-border">
           <Table>
             <TableBody>
-              {attributes.map((attr, i) => (
-                <TableRow key={i}>
-                  <TableCell className="w-48 bg-muted/50 font-medium text-foreground">
-                    <div className="flex items-center gap-2">
-                      <FontAwesomeIcon icon={attr.icon} className="size-4 text-steel" />
-                      {attr.label}
-                    </div>
-                  </TableCell>
-                  {items.map((item, index) => (
-                    <TableCell key={index} className="min-w-48 max-w-[300px] w-[300px] align-top whitespace-normal">
-                      <div className="max-w-[300px]">
-                        {attr.render(item, index)}
-                      </div>
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))}
+              {renderAttributeRows(baseAttributes, 'base')}
+              {split ? (
+                <>
+                  {commonKeys.length > 0 && (
+                    <>
+                      {renderSectionHeader('Gemeinsame Eigenschaften', commonKeys.length)}
+                      {renderAttributeRows(commonKeys.map(specAttribute), 'common')}
+                    </>
+                  )}
+                  {uniqueKeys.length > 0 && (
+                    <>
+                      {renderSectionHeader('Weitere / Einzel-Eigenschaften', uniqueKeys.length)}
+                      {renderAttributeRows(uniqueKeys.map(specAttribute), 'unique')}
+                    </>
+                  )}
+                </>
+              ) : (
+                renderAttributeRows(allKeys.map(specAttribute), 'spec')
+              )}
 
               <TableRow>
                 <TableCell className="bg-muted/50 font-medium text-foreground">Aktionen</TableCell>

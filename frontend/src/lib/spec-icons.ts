@@ -11,6 +11,8 @@ import {
   faCircleInfo,
 } from '@fortawesome/free-solid-svg-icons'
 
+export { groupSpecKeys, parseSpecsString, type GroupedSpecKeys, type ParsedSpecPart } from './spec-grouping'
+
 const ICON_BY_KEY: Record<string, IconDefinition> = {
   gewicht: faScaleBalanced,
   weight: faScaleBalanced,
@@ -36,27 +38,6 @@ const ICON_BY_KEY: Record<string, IconDefinition> = {
 
 export function iconForSpecKey(key: string): IconDefinition {
   return ICON_BY_KEY[key.toLowerCase()] ?? faCircleInfo
-}
-
-export interface ParsedSpecPart {
-  key: string | null
-  value: string
-}
-
-/** Splits the `<br>`-joined "Key: Value" spec string into individual parts. */
-export function parseSpecsString(specs: string | undefined): ParsedSpecPart[] {
-  if (!specs) return []
-  return specs
-    .split(/<br\s*\/?>/i)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => {
-      const colonIndex = part.indexOf(':')
-      if (colonIndex > 0) {
-        return { key: part.substring(0, colonIndex).trim(), value: part.substring(colonIndex + 1).trim() }
-      }
-      return { key: null, value: part }
-    })
 }
 
 /** Joins textarea lines (one "Key: Value" per line) back into the `<br>`-joined storage format. */

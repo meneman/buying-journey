@@ -108,6 +108,49 @@ function specsJsonToString(jsonText) {
     .join(' <br> ');
 }
 
+function normalizeItemsForHash(items) {
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    name: (item && item.name) || 'Unbenannt',
+    price: (item && item.price) || '',
+    rating: (item && item.rating) || '',
+    status: (item && item.status) || 'Thinking',
+    notes: (item && item.notes) || '',
+    link: (item && item.link) || '',
+    specs: specsJsonToString(specsStringToJson(item && item.specs)),
+  }));
+}
+
+/** Deterministischer Hash über alle normalisierten Item-Felder einer Journey. */
+function computeItemsHash(items) {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(normalizeItemsForHash(items)), 'utf8')
+    .digest('hex');
+}
+
+function parseSpecComparison(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      Array.isArray(parsed.commonKeys) &&
+      Array.isArray(parsed.uniqueKeys)
+    ) {
+      return {
+        commonKeys: parsed.commonKeys.filter((k) => typeof k === 'string'),
+        uniqueKeys: parsed.uniqueKeys.filter((k) => typeof k === 'string'),
+        ...(typeof parsed.updatedAt === 'string' ? { updatedAt: parsed.updatedAt } : {}),
+      };
+    }
+  } catch {
+    // Ungültiges JSON still ignorieren.
+  }
+  return null;
+}
+
 function openDatabase(dbPathExplicit) {
   const dbPath = resolveDbPath(dbPathExplicit);
   if (dbPath !== ':memory:') {
@@ -152,6 +195,7 @@ function openDatabase(dbPathExplicit) {
       target_date TEXT NOT NULL DEFAULT '',
       general_notes TEXT NOT NULL DEFAULT '',
       feedback TEXT NOT NULL DEFAULT '',
+      spec_comparison TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (owner_id, slug)
@@ -215,6 +259,13 @@ function openDatabase(dbPathExplicit) {
   );
   if (!itemColumns.has('needs_content')) {
     db.exec('ALTER TABLE items ADD COLUMN needs_content INTEGER NOT NULL DEFAULT 0');
+  }
+
+  const journeyColumns = new Set(
+    db.prepare('PRAGMA table_info(journeys)').all().map((c) => c.name)
+  );
+  if (!journeyColumns.has('spec_comparison')) {
+    db.exec("ALTER TABLE journeys ADD COLUMN spec_comparison TEXT NOT NULL DEFAULT ''");
   }
 
   // Legt die Journey im Namensraum des Owners an (still, sofern fehlend).
@@ -439,6 +490,7 @@ function openDatabase(dbPathExplicit) {
       )
       .all(owner, slug)
       .map((r) => ({ label: r.label, value: r.value }));
+    const specComparison = parseSpecComparison(j.spec_comparison);
     return {
       status: { phase: j.phase, budget: j.budget, targetDate: j.target_date },
       journey,
@@ -448,32 +500,78 @@ function openDatabase(dbPathExplicit) {
       headers: ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link'],
       sectionTitle: j.section_title,
       listTitle: j.list_title,
+      ...(specComparison ? { specComparison } : {}),
     };
   }
 
+  /**
+   * Liest die aktuellen Items einer Journey samt Hash ohne Lazy-Create.
+   * Dient der Änderungserkennung und Race-Condition-Absicherung beim
+   * asynchronen Property-Abgleich.
+   */
+  function getItemsSnapshot(slug, owner) {
+    requireOwner(owner);
+    const exists = db
+      .prepare('SELECT 1 FROM journeys WHERE owner_id = ? AND slug = ?')
+      .get(owner, slug);
+    if (!exists) return { exists: false, items: [], hash: computeItemsHash([]) };
+    const items = db
+      .prepare(
+        'SELECT name, price, rating, status, notes, link, specs FROM items WHERE owner_id = ? AND journey_slug = ? ORDER BY position, id'
+      )
+      .all(owner, slug)
+      .map((item) => ({
+        name: item.name,
+        price: item.price,
+        rating: item.rating,
+        status: item.status,
+        notes: item.notes,
+        link: item.link,
+        specs: specsJsonToString(item.specs),
+      }));
+    return { exists: true, items, hash: computeItemsHash(items) };
+  }
+
   // Full-document replace (mirrors the old whole-file markdown writes).
-  function saveJourneyData(slug, owner, data) {
+  function saveJourneyData(slug, owner, data, options = {}) {
     requireOwner(owner);
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
       throw new Error('Journey data must be an object.');
     }
     ensureOwnedJourney(slug, owner);
     const status = data.status || {};
+    const preserveComparison = Boolean(options && options.preserveSpecComparison);
     db.exec('BEGIN');
     try {
-      db.prepare(
-        `UPDATE journeys SET section_title = ?, list_title = ?, phase = ?, budget = ?,
-         target_date = ?, general_notes = ?, updated_at = datetime('now') WHERE owner_id = ? AND slug = ?`
-      ).run(
-        data.sectionTitle || 'Items Under Consideration',
-        data.listTitle || 'Spezifikationen',
-        status.phase || 'Planning',
-        status.budget || '',
-        status.targetDate || '',
-        data.generalNotes || '',
-        owner,
-        slug
-      );
+      if (preserveComparison) {
+        db.prepare(
+          `UPDATE journeys SET section_title = ?, list_title = ?, phase = ?, budget = ?,
+           target_date = ?, general_notes = ?, updated_at = datetime('now') WHERE owner_id = ? AND slug = ?`
+        ).run(
+          data.sectionTitle || 'Items Under Consideration',
+          data.listTitle || 'Spezifikationen',
+          status.phase || 'Planning',
+          status.budget || '',
+          status.targetDate || '',
+          data.generalNotes || '',
+          owner,
+          slug
+        );
+      } else {
+        db.prepare(
+          `UPDATE journeys SET section_title = ?, list_title = ?, phase = ?, budget = ?,
+           target_date = ?, general_notes = ?, spec_comparison = '', updated_at = datetime('now') WHERE owner_id = ? AND slug = ?`
+        ).run(
+          data.sectionTitle || 'Items Under Consideration',
+          data.listTitle || 'Spezifikationen',
+          status.phase || 'Planning',
+          status.budget || '',
+          status.targetDate || '',
+          data.generalNotes || '',
+          owner,
+          slug
+        );
+      }
       db.prepare('DELETE FROM journey_logs WHERE owner_id = ? AND journey_slug = ?').run(owner, slug);
       const insertLog = db.prepare(
         'INSERT INTO journey_logs (owner_id, journey_slug, date, event, position) VALUES (?, ?, ?, ?, ?)'
@@ -508,6 +606,79 @@ function openDatabase(dbPathExplicit) {
         );
       });
       db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /**
+   * Interner Speichervorgang für das Ergebnis des asynchronen Property-Abgleichs:
+   * - Prüft atomar per `expectedItemsHash`, ob die Items seit Job-Start unverändert
+   *   sind (verhindert das Überschreiben neuerer Nutzer-Edits).
+   * - Schreibt nur `items.specs` und `journeys.spec_comparison`, triggert keinen
+   *   rekursiven KI-Abgleich.
+   */
+  function applySpecAlignment(slug, owner, { expectedItemsHash, updatedSpecsByIndex, specComparison } = {}) {
+    requireOwner(owner);
+    db.exec('BEGIN');
+    try {
+      const exists = db
+        .prepare('SELECT 1 FROM journeys WHERE owner_id = ? AND slug = ?')
+        .get(owner, slug);
+      if (!exists) {
+        db.exec('ROLLBACK');
+        return { applied: false, reason: 'not_found' };
+      }
+
+      const rows = db
+        .prepare(
+          'SELECT id, name, price, rating, status, notes, link, specs FROM items WHERE owner_id = ? AND journey_slug = ? ORDER BY position, id'
+        )
+        .all(owner, slug);
+      const currentItems = rows.map((item) => ({
+        name: item.name,
+        price: item.price,
+        rating: item.rating,
+        status: item.status,
+        notes: item.notes,
+        link: item.link,
+        specs: specsJsonToString(item.specs),
+      }));
+
+      if (expectedItemsHash && computeItemsHash(currentItems) !== expectedItemsHash) {
+        db.exec('ROLLBACK');
+        return { applied: false, reason: 'stale' };
+      }
+
+      let changedSpecs = false;
+      if (Array.isArray(updatedSpecsByIndex) && updatedSpecsByIndex.length === rows.length) {
+        const updateItem = db.prepare(
+          "UPDATE items SET specs = json(?), updated_at = datetime('now') WHERE id = ?"
+        );
+        for (let i = 0; i < rows.length; i++) {
+          const nextSpec = typeof updatedSpecsByIndex[i] === 'string' ? updatedSpecsByIndex[i] : currentItems[i].specs;
+          if (nextSpec !== currentItems[i].specs) {
+            updateItem.run(specsStringToJson(nextSpec), rows[i].id);
+            changedSpecs = true;
+          }
+        }
+      }
+
+      const serializedComparison = specComparison
+        ? JSON.stringify({
+            commonKeys: Array.isArray(specComparison.commonKeys) ? specComparison.commonKeys : [],
+            uniqueKeys: Array.isArray(specComparison.uniqueKeys) ? specComparison.uniqueKeys : [],
+            ...(typeof specComparison.updatedAt === 'string' ? { updatedAt: specComparison.updatedAt } : {}),
+          })
+        : '';
+
+      db.prepare(
+        "UPDATE journeys SET spec_comparison = ?, updated_at = datetime('now') WHERE owner_id = ? AND slug = ?"
+      ).run(serializedComparison, owner, slug);
+
+      db.exec('COMMIT');
+      return { applied: true, changedSpecs };
     } catch (err) {
       db.exec('ROLLBACK');
       throw err;
@@ -613,27 +784,30 @@ function openDatabase(dbPathExplicit) {
     db.close();
   }
 
-  return {
-    path: dbPath,
-    listJourneys,
-    listJourneyConfigs,
-    getJourneyConfig,
-    saveJourneyConfig,
-    createJourney,
-    deleteJourney,
-    getJourneyData,
-    saveJourneyData,
-    getFeedback,
-    saveFeedback,
-    specValues,
-    hashApiKey,
-    isApiKeyFormat,
-    createApiKey,
-    listApiKeys,
-    revokeApiKey,
-    findApiKeyOwner,
-    close,
-  };
+    return {
+      path: dbPath,
+      listJourneys,
+      listJourneyConfigs,
+      getJourneyConfig,
+      saveJourneyConfig,
+      createJourney,
+      deleteJourney,
+      getJourneyData,
+      getItemsSnapshot,
+      saveJourneyData,
+      applySpecAlignment,
+      computeItemsHash,
+      getFeedback,
+      saveFeedback,
+      specValues,
+      hashApiKey,
+      isApiKeyFormat,
+      createApiKey,
+      listApiKeys,
+      revokeApiKey,
+      findApiKeyOwner,
+      close,
+    };
 }
 
-module.exports = { openDatabase, specsStringToJson, specsJsonToString, resolveDbPath };
+module.exports = { openDatabase, specsStringToJson, specsJsonToString, computeItemsHash, resolveDbPath };

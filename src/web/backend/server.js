@@ -3,6 +3,13 @@ const dotenv = require('dotenv');
 const path = require('path');
 const { openDatabase } = require('../../db/store.js');
 const { optionalAuth, requireUser } = require('./auth.js');
+const { createCrawlQueue, readQueueConcurrency, readAlignmentDebounceMs } = require('./crawl-queue.js');
+const {
+  alignJourneySpecs,
+  computeDeterministicSpecComparison,
+  hasAnyKeyedSpecs,
+  findUsableLlmProvider,
+} = require('./spec-alignment.js');
 
 // Load environment variables
 dotenv.config();
@@ -13,6 +20,7 @@ const FRONTEND_DIST = process.env.FRONTEND_DIST || path.join(__dirname, '../../.
 
 // SQLite storage (file from DB_PATH, default ./data/app.db). No network, no sync.
 const store = openDatabase();
+const specQueue = createCrawlQueue({ concurrency: readQueueConcurrency() });
 
 // Pflicht-Gate für alle Daten-Routen: API-Key oder Supabase-JWT als
 // Bearer-Token. Die Owner-Trennung (req.user.id) funktioniert nur mit
@@ -347,8 +355,52 @@ app.post('/api/data', needUser, (req, res) => {
     if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).length === 0) {
       return res.status(400).json({ error: 'Request-Body muss ein nicht-leeres JSON-Objekt sein.' });
     }
-    store.saveJourneyData(journey, req.user.id, data);
-    broadcastJourneyUpdate(req.user.id, journey);
+    const owner = req.user.id;
+    const before = store.getItemsSnapshot(journey, owner);
+    const nextItems = Array.isArray(data.items) ? data.items : [];
+    const nextHash = store.computeItemsHash(nextItems);
+    const itemsChanged = before.hash !== nextHash;
+
+    store.saveJourneyData(journey, owner, data, { preserveSpecComparison: !itemsChanged });
+
+    if (itemsChanged && nextItems.length >= 2 && hasAnyKeyedSpecs(nextItems)) {
+      const provider = findUsableLlmProvider();
+      if (!provider) {
+        // Stiller deterministischer Fallback ohne LLM-Provider und ohne Extra-SSE.
+        const deterministic = computeDeterministicSpecComparison(nextItems, {
+          updatedAt: new Date().toISOString(),
+        });
+        store.applySpecAlignment(journey, owner, {
+          expectedItemsHash: nextHash,
+          specComparison: deterministic,
+        });
+      } else {
+        const itemsCopy = nextItems.map((item) => ({ ...item }));
+        specQueue.scheduleDebounced({
+          key: sseChannel(owner, journey),
+          owner,
+          journey,
+          kind: 'property-sync',
+          debounceMs: readAlignmentDebounceMs(),
+          spec: { expectedHash: nextHash, items: itemsCopy },
+          run: async ({ expectedHash, items }, { isLatest }) => {
+            const aligned = await alignJourneySpecs({ journey, items });
+            if (!isLatest()) return { skipped: true };
+            const commit = store.applySpecAlignment(journey, owner, {
+              expectedItemsHash: expectedHash,
+              updatedSpecsByIndex: aligned.updatedSpecsByIndex,
+              specComparison: aligned.specComparison,
+            });
+            if (commit.applied && (aligned.usedLlm || commit.changedSpecs)) {
+              broadcastJourneyUpdate(owner, journey, { reason: 'property-sync' });
+            }
+            return { applied: commit.applied, usedLlm: aligned.usedLlm, changedSpecs: commit.changedSpecs };
+          },
+        });
+      }
+    }
+
+    broadcastJourneyUpdate(owner, journey);
     res.json({ success: true });
   } catch (error) {
     console.error('API POST Error:', error);
@@ -408,6 +460,7 @@ if (require.main === module) {
 }
 
 function closeDatabase() {
+  specQueue.dispose();
   store.close();
 }
 

@@ -50,6 +50,12 @@ export const JOURNEY_CATEGORIES = [
   { value: 'sonstiges', label: 'Sonstiges' },
 ] as const
 
+export interface SpecComparison {
+  commonKeys: string[]
+  uniqueKeys: string[]
+  updatedAt?: string
+}
+
 export interface JourneyData {
   status: JourneyStatus
   journey: JourneyLogEntry[]
@@ -59,6 +65,7 @@ export interface JourneyData {
   headers: string[]
   sectionTitle: string
   listTitle: string
+  specComparison?: SpecComparison
 }
 
 export const ITEM_STATUSES = [

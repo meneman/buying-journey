@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "description": "Ergebnis des Property-Abgleichs für Item-Specs einer Buying Journey.",
+  "properties": {
+    "keyMappings": {
+      "type": "array",
+      "description": "Zuordnungen von ursprünglichen Spec-Keys auf eine einheitliche kanonische Schreibweise.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" }
+        },
+        "required": ["from", "to"]
+      }
+    },
+    "commonKeys": {
+      "type": "array",
+      "description": "Kanonische Spec-Keys, die bei allen Items befüllt sind.",
+      "items": { "type": "string" }
+    },
+    "uniqueKeys": {
+      "type": "array",
+      "description": "Kanonische Spec-Keys, die nur bei einzelnen Items vorkommen.",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["keyMappings", "commonKeys", "uniqueKeys"]
+}
