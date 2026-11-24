@@ -1,0 +1,12 @@
+node_modules
+frontend/node_modules
+frontend/dist
+data/*.db
+data/*.db-journal
+.git
+.env
+.env.local
+.agents
+docs
+test
+*.log

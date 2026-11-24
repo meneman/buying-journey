@@ -1,0 +1,27 @@
+services:
+  buying-journey:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - VITE_SUPABASE_URL=${VITE_SUPABASE_URL:-https://epknwdxauctkdcwpsslh.supabase.co}
+        - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY:-}
+    container_name: buying-journey
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - PORT=3000
+      - DB_PATH=/app/data/app.db
+      - FRONTEND_DIST=/app/frontend/dist
+      - SUPABASE_URL=${SUPABASE_URL:-https://epknwdxauctkdcwpsslh.supabase.co}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      - AUTH_REQUIRED=${AUTH_REQUIRED:-false}
+      - CRAWL_FETCH_PROVIDER=${CRAWL_FETCH_PROVIDER:-direct}
+      - CRAWL_EXTRACT_PROVIDER=${CRAWL_EXTRACT_PROVIDER:-n8n}
+      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL:-}

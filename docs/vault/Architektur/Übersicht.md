@@ -1,6 +1,6 @@
 # Architektur — Übersicht 🗺️
 
-JourneyPath ist eine lokale Kaufbegleit-App: **Express-Backend** (`src/`, SQLite `data/app.db`) + **React-Frontend** (`frontend/`, Vite-Dev `:5173`, Build in `frontend/dist/`). Port: Code-Default `3000`, `.env.example` und der Vite-Proxy nutzen `1337`.
+JourneyPath ist eine lokale Kaufbegleit-App: **Express-Backend** (`src/`, SQLite `data/app.db`) + **React-Frontend** (`frontend/`, Vite-Dev `:3300`, Build in `frontend/dist/`). Port: Code-Default `3000`, `.env.example` und der Vite-Proxy nutzen `1337`.
 
 - [[Backend]] — Datenstruktur (Tabellen `journeys`, `journey_logs`, `journey_specs`, `items`, `api_keys` + schemaloses `items.specs`-JSON), Store-API, REST-Endpunkte, Auth + Owner-Trennung, SSE, zweistufige Crawl-Pipeline, MCP
 - [[Frontend]] — Seiten, Komponenten, `lib/`-Bausteine, Routing über `?journey=`, Login-Gate, Datenfluss (REST + SSE)
@@ -25,7 +25,7 @@ Jede Schreiboperation auf eine Journey broadcastet per SSE an offene Browser (To
 
 ```bash
 npm install && npm install --prefix frontend
-npm run dev     # Backend (:1337 laut .env) + Vite :5173, /api wird geproxyt
+npm run dev     # Backend (:1337 laut .env) + Vite :3300, /api wird geproxyt
 npm start       # Backend serviert frontend/dist
 npm test        # Backend-Tests (aktuell 132)
 npm run mcp     # stdio-MCP-Server (braucht laufendes Backend + API-Key)

@@ -1,0 +1,27 @@
+{
+  "name": "@journey-path/mcp",
+  "version": "1.0.0",
+  "description": "Lightweight, zero-dependency MCP server for JourneyPath buying journeys",
+  "bin": {
+    "journey-path-mcp": "./bin/journey-path-mcp.js",
+    "journey-path": "./bin/journey-path-mcp.js"
+  },
+  "main": "./src/server.js",
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "buying-journey",
+    "journey-path"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {}
+}

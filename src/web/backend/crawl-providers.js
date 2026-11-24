@@ -696,6 +696,13 @@ function listProviders() {
  * Aufträge werden Queue-Jobs. `crawlProduct` nutzt denselben Prolog, damit
  * Direktaufrufe (Worker, Tests) identisch validieren.
  */
+function assertFetcherReady(fetcherName) {
+  const fetcherImpl = fetchers[fetcherName];
+  if (!fetcherImpl || !fetcherImpl.isConfigured()) {
+    throw { status: 501, message: fetcherName === 'local-cmd' ? 'CRAWL_FETCH_CMD ist nicht konfiguriert.' : 'Das Parse-Tool ist nicht verfügbar.' };
+  }
+}
+
 function checkImportLinkReady({ url, provider, fetcher }) {
   validateLink(url);
   // Beide Stufen-Namen zuerst auflösen: ungültige Request-Werte antworten 400,
@@ -707,10 +714,7 @@ function checkImportLinkReady({ url, provider, fetcher }) {
     throw { status: extractorName === 'n8n' ? 500 : 501, message: extractorHint(extractorName) };
   }
   if (!extractor.combined) {
-    const fetcherImpl = fetchers[fetcherName];
-    if (!fetcherImpl.isConfigured()) {
-      throw { status: 501, message: fetcherName === 'local-cmd' ? 'CRAWL_FETCH_CMD ist nicht konfiguriert.' : 'Das Parse-Tool ist nicht verfügbar.' };
-    }
+    assertFetcherReady(fetcherName);
   }
   return { url, extractorName, fetcherName };
 }
@@ -727,6 +731,57 @@ function checkImportLinkReady({ url, provider, fetcher }) {
  * automatisch `headless` nachgeladen, sofern verfügbar. Explizit gewählte
  * Fetcher fallen nicht zurück — deren Fehler gehen direkt an den Aufrufer.
  */
+/**
+ * Stufe 1: Lädt den Inhalt einer URL per Fetcher (Default: direct mit headless-Fallback).
+ * Gibt { url, title, text, fetcher, fallbackFrom, fetchMs } zurück.
+ */
+async function fetchProductContent({ url, journey = 'bike', fetcher }) {
+  validateLink(url);
+  const host = hostOf(url);
+  const fetcherName = resolveFetcherName(fetcher);
+  assertFetcherReady(fetcherName);
+  const fetcherImpl = fetchers[fetcherName];
+  crawlLog('start', `host=${host} journey=${journey} fetcher=${fetcherName}`);
+  const fetchStarted = Date.now();
+  let content;
+  let usedFetcher = fetcherName;
+  let fallbackFrom = null;
+  if (fetcherName === 'direct' && fetchers['headless'].isConfigured()) {
+    const minChars = readMinDirectChars();
+    try {
+      content = await fetcherImpl.fetch(url, journey);
+      if (content.text.length < minChars) {
+        crawlLog('fetch', `host=${host} fetcher=direct text=${content.text.length}ch < ${minChars} (dünn) -> fallback headless`);
+        try {
+          const headlessContent = await fetchers['headless'].fetch(url, journey);
+          content = headlessContent;
+          usedFetcher = 'headless';
+          fallbackFrom = 'direct';
+        } catch (headlessErr) {
+          crawlLog('fetch', `host=${host} headless fallback fehlgeschlagen, behalte direct (${content.text.length}ch): ${(headlessErr && headlessErr.message) || headlessErr}`);
+        }
+      }
+    } catch (error) {
+      crawlLog('fetch', `host=${host} fetcher=direct FEHLER (${(error && error.status) || '?'}: ${(error && error.message) || error}) -> fallback headless`);
+      content = await fetchers['headless'].fetch(url, journey);
+      usedFetcher = 'headless';
+      fallbackFrom = 'direct';
+    }
+  } else {
+    content = await fetcherImpl.fetch(url, journey);
+  }
+  const fetchMs = Date.now() - fetchStarted;
+  crawlLog('fetch', `host=${host} fetcher=${usedFetcher}${fallbackFrom ? ` (fallback von ${fallbackFrom})` : ''} titel=${content.title.length}ch text=${content.text.length}ch ms=${fetchMs}`);
+  return {
+    url,
+    title: content.title || '',
+    text: content.text || '',
+    fetcher: usedFetcher,
+    fallbackFrom,
+    fetchMs,
+  };
+}
+
 async function crawlProduct({ url, journey, provider, fetcher }) {
   const { extractorName, fetcherName } = checkImportLinkReady({ url, provider, fetcher });
   const extractor = providers[extractorName];
@@ -740,33 +795,9 @@ async function crawlProduct({ url, journey, provider, fetcher }) {
     return { raw, provider: extractorName, fetcher: null, meta: baseMeta(host, null, 0, 0, 0, extractMs) };
   }
   // Fetcher-Konfiguration ist via checkImportLinkReady bereits geprüft.
-  const fetcherImpl = fetchers[fetcherName];
-  crawlLog('start', `host=${host} journey=${journey} extractor=${extractorName} fetcher=${fetcherName}`);
-  const fetchStarted = Date.now();
-  let content;
-  let usedFetcher = fetcherName;
-  let fallbackFrom = null;
-  if (fetcherName === 'direct' && fetchers['headless'].isConfigured()) {
-    const minChars = readMinDirectChars();
-    try {
-      content = await fetcherImpl.fetch(url, journey);
-      if (content.text.length < minChars) {
-        crawlLog('fetch', `host=${host} fetcher=direct text=${content.text.length}ch < ${minChars} (dünn) -> fallback headless`);
-        content = await fetchers['headless'].fetch(url, journey);
-        usedFetcher = 'headless';
-        fallbackFrom = 'direct';
-      }
-    } catch (error) {
-      crawlLog('fetch', `host=${host} fetcher=direct FEHLER (${(error && error.status) || '?'}: ${(error && error.message) || error}) -> fallback headless`);
-      content = await fetchers['headless'].fetch(url, journey);
-      usedFetcher = 'headless';
-      fallbackFrom = 'direct';
-    }
-  } else {
-    content = await fetcherImpl.fetch(url, journey);
-  }
-  const fetchMs = Date.now() - fetchStarted;
-  crawlLog('fetch', `host=${host} fetcher=${usedFetcher}${fallbackFrom ? ` (fallback von ${fallbackFrom})` : ''} titel=${content.title.length}ch text=${content.text.length}ch ms=${fetchMs}`);
+  const { title, text, fetcher: usedFetcher, fallbackFrom, fetchMs } =
+    await fetchProductContent({ url, journey, fetcher: fetcherName });
+  const content = { title, text };
   const extractStarted = Date.now();
   const raw = await extractor.extract(url, journey, content);
   const extractMs = Date.now() - extractStarted;
@@ -934,6 +965,7 @@ module.exports = {
   validateLink,
   checkImportLinkReady,
   checkParseTextReady,
+  fetchProductContent,
   crawlProduct,
   parseProductText,
   suggestJourneyCategory,

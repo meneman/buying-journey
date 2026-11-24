@@ -192,3 +192,28 @@ test('needsContent-Flag übersteht den Save/Get-Roundtrip (gesetzt und ungesetzt
   });
   assert.ok(!('needsContent' in store.getJourneyData('bike', 'anna').items[0]));
 });
+
+test('deleteJourney removes owner journey with cascade and leaves other owners untouched', (t) => {
+  const store = memDb(t);
+  store.saveJourneyData('bike', 'anna', {
+    status: { phase: 'Comparing' },
+    journey: [{ date: '2026-07-01', event: 'Test' }],
+    items: [{ name: 'Annas Rad', specs: 'Gewicht: 10 kg', status: 'Thinking' }],
+    specs: [{ label: 'Größe', value: 'M' }],
+    generalNotes: 'Notiz',
+  });
+  store.saveJourneyData('bike', 'benni', {
+    status: {},
+    journey: [],
+    items: [{ name: 'Bennis Rad', status: 'Thinking' }],
+    specs: [],
+    generalNotes: '',
+  });
+  assert.equal(store.deleteJourney('gibt-es-nicht', 'anna'), false);
+  assert.equal(store.deleteJourney('bike', 'anna'), true);
+  assert.equal(store.deleteJourney('bike', 'anna'), false);
+  assert.deepEqual(store.listJourneys('anna'), []);
+  assert.deepEqual(store.specValues('bike', 'anna', 'gewicht'), []);
+  assert.deepEqual(store.listJourneys('benni'), ['bike']);
+  assert.deepEqual(store.getJourneyData('bike', 'benni').items.map((i) => i.name), ['Bennis Rad']);
+});

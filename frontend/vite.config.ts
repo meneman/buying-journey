@@ -11,7 +11,9 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  envDir: path.resolve(__dirname, '..'),
   server: {
+    port: 3300,
     proxy: {
       '/api': {
         target: 'http://localhost:1337',

@@ -54,3 +54,5 @@ export function useJourneyHref() {
   const journey = useJourney()
   return (pathname: string) => `${pathname}?journey=${encodeURIComponent(journey)}`
 }
+
+export { targetPathForJourneySwitch } from './router-path'

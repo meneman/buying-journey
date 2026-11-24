@@ -6,7 +6,7 @@
 ## 1. Überblick
 
 - **Stack:** Vite 7, React 18, TypeScript, `tailwindcss` (Vite-Plugin), shadcn/ui-Komponenten in `src/components/ui/`, Icons via `spec-icons.ts` + FontAwesome, Theme via `next-themes` (Hell/Dunkel).
-- **Start:** `npm run dev` → Vite `:5173` proxyt `/api` ans Backend (`http://localhost:1337`); `npm run build` → `frontend/dist/` (wird vom Backend statisch ausgeliefert).
+- **Start:** `npm run dev` → Vite `:3300` proxyt `/api` ans Backend (`http://localhost:1337`); `npm run build` → `frontend/dist/` (wird vom Backend statisch ausgeliefert).
 - **Alias:** `@` → `frontend/src` (siehe `vite.config.ts` + `tsconfig.*`).
 - **Env:** `frontend/.env` — `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (gleiche Werte wie Backend ohne Prefix).
 

@@ -182,11 +182,17 @@ async function resolveUser(store, token) {
     if (!hit) return null;
     return { id: hit.userId, authMethod: 'api-key', keyName: hit.name };
   }
-  if (!isAuthConfigured()) return null;
+  if (!isAuthConfigured()) {
+    console.warn(
+      '[auth] resolveUser: Supabase-Auth ist nicht konfiguriert (SUPABASE_URL oder SUPABASE_ANON_KEY fehlt im Backend-Prozess).',
+    );
+    return null;
+  }
   try {
     const verified = await verifyAccessToken(token);
     return { ...verified, authMethod: 'jwt' };
-  } catch {
+  } catch (err) {
+    console.warn('[auth] resolveUser: Token-Verifizierung fehlgeschlagen:', err && err.message);
     return null;
   }
 }

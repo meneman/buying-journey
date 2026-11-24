@@ -353,6 +353,52 @@ test('POST /api/journeys accepts base properties as config defaults', async (t) 
   assert.equal(config.category, 'laptop');
 });
 
+test('POST /api/crawl-link rejects unauthorized requests with 401', async (t) => {
+  const base = await startApp(t);
+  const res = await fetch(`${base}/api/crawl-link`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ link: 'https://example.com/item' }),
+  });
+  assert.equal(res.status, 401);
+});
+
+test('POST /api/crawl-link validates URLs', async (t) => {
+  const base = await startApp(t);
+  for (const body of [{ link: '' }, { link: 'not-a-url' }, { link: 'ftp://example.com' }]) {
+    const res = await postJson(base, '/api/crawl-link', body);
+    assert.equal(res.status, 400);
+  }
+});
+
+test('POST /api/crawl-link fetches and returns content via custom fetcher', async (t) => {
+  const base = await startApp(t, {
+    CRAWL_FETCH_CMD: `printf '%s' '{"title":"Test Item","text":"Hello world specification text"}'`,
+  });
+  const res = await postJson(base, '/api/crawl-link', {
+    link: 'https://example.com/test',
+    fetcher: 'local-cmd',
+    maxChars: 11,
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.url, 'https://example.com/test');
+  assert.equal(body.title, 'Test Item');
+  assert.equal(body.text, 'Hello world');
+  assert.equal(body.truncated, true);
+  assert.equal(body.fetcher, 'local-cmd');
+});
+
+test('GET /api/mcp-status includes packageName and server info', async (t) => {
+  const base = await startApp(t);
+  const res = await fetch(`${base}/api/mcp-status`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.packageName, '@journey-path/mcp');
+  assert.equal(body.server.name, 'bike-buying-journey');
+  assert.ok(Array.isArray(body.tools));
+});
+
 test('SPA fallback serves the built frontend', async (t) => {
   const base = await startApp(t);
   const res = await fetch(`${base}/irgendeine-route`);
@@ -365,4 +411,40 @@ test('SPA fallback answers JSON when no build exists', async (t) => {
   const res = await fetch(`${base}/irgendeine-route`);
   assert.equal(res.status, 404);
   assert.equal(typeof (await res.json()).error, 'string');
+});
+
+async function deleteReq(base, path, key) {
+  return fetch(`${base}${path}`, {
+    method: 'DELETE',
+    headers: withAuth(key !== undefined ? key : testKey(base)),
+  });
+}
+
+test('DELETE /api/journeys deletes an owned journey and validates slug/ownership', async (t) => {
+  const base = await startApp(t);
+  await postJson(base, '/api/journeys', { slug: 'laptop', name: 'Notebook' });
+  await postJson(base, '/api/journeys', { slug: 'bike' });
+  // Benni besitzt dasselbe Kürzel unabhängig von Anna.
+  await postJson(base, '/api/journeys', { slug: 'laptop' }, undefined, testKey(base, 'benni'));
+
+  // Fehlender oder ungültiger Slug -> 400 (kein Fallback auf 'bike'!).
+  for (const path of ['/api/journeys', '/api/journeys?journey=', '/api/journeys?journey=!!!']) {
+    const bad = await deleteReq(base, path);
+    assert.equal(bad.status, 400, `expected 400 for ${path}`);
+  }
+  const annaBefore = await (await getAuthed(base, '/api/journeys')).json();
+  assert.ok(annaBefore.includes('bike'), 'bike darf bei 400 nicht gelöscht werden');
+
+  // Unbekannte Journey -> 404 (kein stilles Anlegen).
+  const missing = await deleteReq(base, '/api/journeys?journey=gibt-es-nicht');
+  assert.equal(missing.status, 404);
+
+  // Eigenes Löschen -> 200 und nur Annas Journey verschwindet.
+  const del = await deleteReq(base, '/api/journeys?journey=Laptop');
+  assert.equal(del.status, 200);
+  assert.deepEqual(await del.json(), { success: true, slug: 'laptop' });
+  const annaAfter = await (await getAuthed(base, '/api/journeys')).json();
+  assert.deepEqual(annaAfter, ['bike']);
+  const benniAfter = await (await getAuthed(base, '/api/journeys', testKey(base, 'benni'))).json();
+  assert.deepEqual(benniAfter, ['laptop']);
 });

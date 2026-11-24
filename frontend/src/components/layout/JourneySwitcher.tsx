@@ -13,7 +13,7 @@ import {
 import { fetchJourneys } from '@/lib/api'
 import { iconForJourney } from '@/lib/journey-category'
 import { readRecentJourneys, rememberRecentJourney } from '@/lib/journey-id'
-import { useJourney, useRouter } from '@/lib/router'
+import { targetPathForJourneySwitch, useJourney, useRouter } from '@/lib/router'
 import { CreateJourneyDialog } from './CreateJourneyDialog'
 
 export function JourneySwitcher() {
@@ -46,7 +46,8 @@ export function JourneySwitcher() {
   const Icon = iconForJourney(journey)
 
   function switchTo(next: string) {
-    navigate(`${pathname}?journey=${encodeURIComponent(next)}`)
+    const targetPath = targetPathForJourneySwitch(pathname)
+    navigate(`${targetPath}?journey=${encodeURIComponent(next)}`)
   }
 
   return (

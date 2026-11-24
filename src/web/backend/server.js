@@ -3,7 +3,7 @@ const dotenv = require('dotenv');
 const path = require('path');
 const { openDatabase } = require('../../db/store.js');
 const { optionalAuth, requireUser } = require('./auth.js');
-const { checkImportLinkReady, checkParseTextReady, crawlProduct, listProviders, parseProductText, suggestJourneyCategory, toJourneyItem } = require('./crawl-providers.js');
+const { checkImportLinkReady, checkParseTextReady, crawlProduct, fetchProductContent, listProviders, parseProductText, suggestJourneyCategory, toJourneyItem } = require('./crawl-providers.js');
 const { createCrawlQueue, readQueueConcurrency } = require('./crawl-queue.js');
 
 // Load environment variables
@@ -66,6 +66,7 @@ app.get('/api/mcp-status', (req, res) => {
       inputSchema: tool.inputSchema,
     })),
     serverFile: path.resolve(__dirname, '../../mcp/server.js'),
+    packageName: '@journey-path/mcp',
     port,
     baseUrl,
   });
@@ -235,6 +236,31 @@ app.post('/api/journeys', needUser, (req, res) => {
     res.status(201).json({ success: true, slug });
   } catch (error) {
     console.error('API POST Journeys Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Explicit journey deletion (no fallback to 'bike'): requires `?journey=X`.
+// Answers 200 {success, slug}, 404 when unknown for this owner, 400 when
+// missing/invalid.
+app.delete('/api/journeys', needUser, (req, res) => {
+  try {
+    const raw = req.query ? req.query.journey : undefined;
+    const first = Array.isArray(raw) ? raw[0] : raw;
+    if (typeof first !== 'string' || !first.trim()) {
+      return res.status(400).json({ error: 'Query-Parameter "journey" ist erforderlich.' });
+    }
+    const slug = normalizeJourneySlug(first);
+    if (!slug) {
+      return res.status(400).json({ error: 'Query-Parameter "journey" ergibt kein gültiges Journey-Kürzel (erlaubt: a-z, 0-9, ., -).' });
+    }
+    const deleted = store.deleteJourney(slug, req.user.id);
+    if (!deleted) {
+      return res.status(404).json({ error: `Journey "${slug}" nicht gefunden.` });
+    }
+    res.json({ success: true, slug });
+  } catch (error) {
+    console.error('API DELETE Journeys Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -455,6 +481,37 @@ app.get('/api/import-jobs/:id', needUser, (req, res) => {
   res.json(job);
 });
 
+// Lädt den Inhalt einer URL und gibt { url, title, text, truncated, fetcher, fallbackFrom, fetchMs } zurück.
+// Ermöglicht schlanken Clients (z.B. MCP-Server ohne eigenes Puppeteer/Browser),
+// das serverseitige Crawling (direct mit headless-Fallback) zu nutzen.
+app.post('/api/crawl-link', needUser, async (req, res) => {
+  const { link, url, maxChars, fetcher } = req.body || {};
+  const targetUrl = link ?? url;
+  const max = typeof maxChars === 'number' && maxChars > 0 ? Math.min(Math.floor(maxChars), 50000) : 20000;
+
+  try {
+    const journey = getJourney(req);
+    const content = await fetchProductContent({ url: targetUrl, journey, fetcher });
+    const truncated = content.text.length > max;
+    const text = truncated ? content.text.slice(0, max) : content.text;
+    res.json({
+      url: content.url,
+      title: content.title,
+      text,
+      truncated,
+      fetcher: content.fetcher,
+      fallbackFrom: content.fallbackFrom || null,
+      fetchMs: content.fetchMs,
+    });
+  } catch (error) {
+    if (error && typeof error.status === 'number') {
+      return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+    }
+    console.error('API Crawl-Link Error:', error);
+    res.status(500).json({ error: error && error.message ? error.message : String(error) });
+  }
+});
+
 // Benennt eine Journey (Verallgemeinerung des Produkts) — ohne Fetch, ohne
 // Speichern. `{ url|link, title, text }` liefert bereits geparsten Inhalt
 // (z.B. aus dem MCP-Crawl), `{ provider }` wählt die Auswertung ("agy",
@@ -528,7 +585,12 @@ app.get('*', (req, res) => {
 // which keeps it usable from tests and other tooling).
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT} (SQLite: ${store.path})`);
+    const { isAuthConfigured } = require('./auth.js');
+    console.log(
+      `Server running on http://localhost:${PORT} (SQLite: ${store.path}, Supabase-Auth: ${
+        isAuthConfigured() ? 'aktiv' : 'NICHT konfiguriert'
+      })`
+    );
   });
 }
 

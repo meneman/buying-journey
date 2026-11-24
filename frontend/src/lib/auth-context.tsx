@@ -1,12 +1,11 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
-import { getOAuthRedirectUrl, getSupabase, isSupabaseConfigured, type OAuthProvider } from './supabase'
+import { getOAuthRedirectUrl, getSupabase, type OAuthProvider } from './supabase'
 
 interface AuthContextValue {
   user: User | null
   session: Session | null
   loading: boolean
-  configured: boolean
   /** Meldet an, gibt bei Fehler die Nachricht zurück (sonst null). */
   signIn: (email: string, password: string) => Promise<string | null>
   /** Registriert, gibt bei Fehler die Nachricht zurück (sonst null). */
@@ -23,8 +22,6 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-const NOT_CONFIGURED = 'Supabase ist nicht konfiguriert (VITE_SUPABASE_ANON_KEY fehlt).'
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
@@ -32,10 +29,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const supabase = getSupabase()
-    if (!supabase) {
-      setLoading(false)
-      return
-    }
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session)
       setUser(data.session?.user ?? null)
@@ -51,23 +44,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const signIn = async (email: string, password: string): Promise<string | null> => {
-    const supabase = getSupabase()
-    if (!supabase) return NOT_CONFIGURED
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { error } = await getSupabase().auth.signInWithPassword({ email, password })
     return error ? error.message : null
   }
 
   const signUp = async (email: string, password: string): Promise<string | null> => {
-    const supabase = getSupabase()
-    if (!supabase) return NOT_CONFIGURED
-    const { error } = await supabase.auth.signUp({ email, password })
+    const { error } = await getSupabase().auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: getOAuthRedirectUrl() },
+    })
     return error ? error.message : null
   }
 
   const signInWithProvider = async (provider: OAuthProvider): Promise<string | null> => {
-    const supabase = getSupabase()
-    if (!supabase) return NOT_CONFIGURED
-    const { error } = await supabase.auth.signInWithOAuth({
+    const { error } = await getSupabase().auth.signInWithOAuth({
       provider,
       options: { redirectTo: getOAuthRedirectUrl() },
     })
@@ -75,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const signOut = async (): Promise<void> => {
-    await getSupabase()?.auth.signOut()
+    await getSupabase().auth.signOut()
   }
 
   return (
@@ -84,7 +75,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         session,
         loading,
-        configured: isSupabaseConfigured,
         signIn,
         signUp,
         signInWithProvider,
@@ -103,11 +93,10 @@ export function useAuth(): AuthContextValue {
 }
 
 /**
- * Globaler Login/Logout-Schalter: einzige Quelle dafür, ob die volle
- * Navigation sichtbar ist. Ohne konfiguriertes Supabase gibt es kein Auth —
- * dann ist alles sichtbar (wie eingeloggt), damit nichts ausgesperrt wird.
+ * Globaler Login-Status: eingeloggt, wenn eine gültige Supabase-Identität
+ * vorliegt. Ohne Identität greift der ausgeloggte Pfad.
  */
 export function useLoggedIn(): { loggedIn: boolean; loading: boolean } {
-  const { user, loading, configured } = useAuth()
-  return { loggedIn: !configured || user !== null, loading }
+  const { user, loading } = useAuth()
+  return { loggedIn: user !== null, loading }
 }

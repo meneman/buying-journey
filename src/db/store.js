@@ -394,6 +394,17 @@ function openDatabase(dbPathExplicit) {
     return slug;
   }
 
+  // Deletes a journey (owner-scoped). FK ON DELETE CASCADE removes child logs,
+  // journey_specs and items. Returns true when a row was deleted, false when
+  // no matching journey existed for this owner.
+  function deleteJourney(slug, owner) {
+    requireOwner(owner);
+    const info = db
+      .prepare('DELETE FROM journeys WHERE owner_id = ? AND slug = ?')
+      .run(owner, slug);
+    return info.changes > 0;
+  }
+
   function getJourneyData(slug, owner) {
     requireOwner(owner);
     ensureOwnedJourney(slug, owner);
@@ -612,6 +623,7 @@ function openDatabase(dbPathExplicit) {
     getJourneyConfig,
     saveJourneyConfig,
     createJourney,
+    deleteJourney,
     getJourneyData,
     saveJourneyData,
     getFeedback,

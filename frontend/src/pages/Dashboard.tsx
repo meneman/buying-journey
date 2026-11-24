@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faPlus, faShieldHalved, faPaperPlane, faTrashCan } from '@fortawesome/free-solid-svg-icons'
+import { faPlus, faShieldHalved, faTrashCan } from '@fortawesome/free-solid-svg-icons'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,11 +15,8 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { AscentTracker } from '@/components/AscentTracker'
-import { ImportJobCard } from '@/components/ImportJobCard'
-import { ImportLinkForm } from '@/components/ImportLinkForm'
 import { ProductCard } from '@/components/ProductCard'
 import { ProductDialog } from '@/components/ProductDialog'
 import { useJourneyData } from '@/lib/journey-data-context'
@@ -36,8 +33,7 @@ function formatDate(dateStr: string) {
 }
 
 export function Dashboard() {
-  const { data, mutate, mutateDebounced, jobs } = useJourneyData()
-  const linkJobs = jobs.filter((j) => j.kind === 'import-link')
+  const { data, mutate, mutateDebounced } = useJourneyData()
   const [dialog, setDialog] = useState<{ open: boolean; index: number | null }>({ open: false, index: null })
   const [newEvent, setNewEvent] = useState('')
   const [newDate, setNewDate] = useState(todayISO)
@@ -117,22 +113,12 @@ export function Dashboard() {
             </Button>
           </div>
 
-          <ImportLinkForm />
-
-          {linkJobs.length > 0 && (
-            <div className="mb-4 flex flex-col gap-2">
-              {linkJobs.map((job) => (
-                <ImportJobCard key={job.jobId} job={job} />
-              ))}
-            </div>
-          )}
-
           {data.items.length === 0 ? (
             <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border py-16 text-center">
               <FontAwesomeIcon icon={faShieldHalved} className="size-8 text-muted-foreground" />
               <h3 className="font-heading font-medium">Noch keine Einträge hinzugefügt</h3>
               <p className="max-w-xs text-sm text-muted-foreground">
-                Füge dein erstes Produkt hinzu, um technische Daten, Preise und Bewertungen zu vergleichen.
+                Füge dein erstes Produkt manuell hinzu oder lass deinen KI-Assistenten per MCP Produkte recherchieren und eintragen.
               </p>
               <Button onClick={() => setDialog({ open: true, index: null })}>Jetzt hinzufügen</Button>
             </div>
@@ -187,26 +173,29 @@ export function Dashboard() {
                           </AlertDialogContent>
                         </AlertDialog>
                       </div>
-                      <p>{entry.event}</p>
+                      <p className="text-foreground">{entry.event}</p>
                     </div>
                   </li>
                 ))}
               </ol>
             )}
 
-            <form onSubmit={handleAddLogEntry} className="flex flex-col gap-2 border-t border-border pt-4">
-              <Input
-                placeholder="Neues Ereignis eintragen…"
+            <form onSubmit={handleAddLogEntry} className="flex flex-col gap-2 border-t border-border pt-3">
+              <input
+                type="date"
+                value={newDate}
+                onChange={(e) => setNewDate(e.target.value)}
+                className="w-full rounded border border-border bg-input px-2 py-1 font-mono text-xs text-foreground"
+              />
+              <Textarea
+                placeholder="Neuer Meilenstein (z.B. Probefahrt gemacht, Angebot erhalten)…"
+                className="h-20 text-xs"
                 value={newEvent}
                 onChange={(e) => setNewEvent(e.target.value)}
-                required
               />
-              <div className="flex gap-2">
-                <Input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} required />
-                <Button type="submit" variant="outline" size="icon" className="shrink-0">
-                  <FontAwesomeIcon icon={faPaperPlane} className="size-4" />
-                </Button>
-              </div>
+              <Button type="submit" size="sm" variant="outline" disabled={!newEvent.trim()}>
+                Eintrag speichern
+              </Button>
             </form>
           </CardContent>
         </Card>

@@ -28,7 +28,7 @@ src/
 ```
 
 - **Kein ORM.** Alles SQL steht in `src/db/store.js`.
-- **Start:** `npm run dev` (Backend + Vite `:5173`), `npm start` (Backend serviert `frontend/dist`), `npm test`, `npm run mcp`.
+- **Start:** `npm run dev` (Backend + Vite `:3300`), `npm start` (Backend serviert `frontend/dist`), `npm test`, `npm run mcp`.
 - **Port:** Code-Default `3000` (`process.env.PORT || 3000`); `.env.example` und der Vite-Proxy nutzen `1337`.
 - **Config:** `.env` — `PORT`, `DB_PATH` (Default `data/app.db`), `CRAWL_*` (§6), `N8N_WEBHOOK_URL`, `SUPABASE_URL` / `SUPABASE_ANON_KEY`, `AUTH_REQUIRED`.
 

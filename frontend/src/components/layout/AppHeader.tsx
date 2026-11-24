@@ -1,6 +1,19 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faArrowsRotate, faPlug } from '@fortawesome/free-solid-svg-icons'
+import {
+  faArrowsRotate,
+  faCircleUser,
+  faPlug,
+  faRightFromBracket,
+} from '@fortawesome/free-solid-svg-icons'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { JourneySwitcher } from './JourneySwitcher'
 import { NavTabs } from './NavTabs'
 import { ThemeToggle } from './ThemeToggle'
@@ -34,7 +47,7 @@ function RouteMark() {
 
 export function AppHeader() {
   const { status, reload } = usePageSync()
-  const { user, configured, signOut } = useAuth()
+  const { user, signOut } = useAuth()
   const { loggedIn, loading } = useLoggedIn()
   const { navigate, pathname } = useRouter()
   const copy = STATUS_COPY[status]
@@ -54,30 +67,52 @@ export function AppHeader() {
             <FontAwesomeIcon icon={faArrowsRotate} className="size-4" />
           </Button>
           <Button
-            variant={pathname === '/mcp' ? 'secondary' : 'ghost'}
+            variant={pathname === '/mcp' ? 'secondary' : 'outline'}
             size="sm"
+            className="gap-1.5 font-medium border-celeste/40 hover:border-celeste"
             title="MCP-Integration: Status + Setup"
             onClick={() => navigate('/mcp')}
           >
-            <FontAwesomeIcon icon={faPlug} className="size-4" />
-            <span className="hidden sm:inline">MCP</span>
+            <FontAwesomeIcon icon={faPlug} className="size-3.5 text-celeste" />
+            <span>MCP einbinden</span>
           </Button>
           <ThemeToggle />
-          {configured &&
-            (user ? (
-              <>
-                <span className="hidden max-w-40 truncate font-mono text-[11px] text-muted-foreground lg:inline">
-                  {user.email}
-                </span>
-                <Button variant="ghost" size="sm" onClick={() => void signOut()}>
-                  Abmelden
+          {user ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="size-8 rounded-full"
+                  title={user.email ? `Konto (${user.email})` : 'Konto'}
+                  aria-label="Konto-Menü"
+                >
+                  <FontAwesomeIcon icon={faCircleUser} className="size-4" />
                 </Button>
-              </>
-            ) : (
-              <Button variant="outline" size="sm" onClick={() => navigate('/login')}>
-                Anmelden
-              </Button>
-            ))}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="font-normal">
+                  <div className="flex flex-col space-y-1">
+                    <p className="text-xs text-muted-foreground">Angemeldet als</p>
+                    <p className="truncate font-mono text-xs font-medium">{user.email}</p>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  className="cursor-pointer"
+                  onSelect={() => void signOut()}
+                >
+                  <FontAwesomeIcon icon={faRightFromBracket} className="size-3.5" />
+                  <span>Abmelden</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button variant="outline" size="sm" onClick={() => navigate('/login')}>
+              Anmelden
+            </Button>
+          )}
         </div>
       </div>
 

@@ -90,8 +90,8 @@ card is a new invocation of this skill, not a continuation of this one.
      history — that lives in the cards' `Erledigt` lines). Include:
      - A short header: the card's title and today's date, plus a note that
        the user needs to start `npm run dev` themselves before testing
-       (Backend on port `3000`, Vite dev server on port `5173`, opens
-       `http://localhost:5173`; `/api` calls are proxied to the backend).
+       (Backend on port `3000`, Vite dev server on port `3300`, opens
+       `http://localhost:3300`; `/api` calls are proxied to the backend).
      - Concrete `- [ ]` checklist points — which page/URL to open, what
        state/element to look at and how it should behave, and any edge cases
        the card's sub-bullets explicitly called out.

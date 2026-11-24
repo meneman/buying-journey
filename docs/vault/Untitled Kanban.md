@@ -6,19 +6,62 @@ kanban-plugin: board
 
 ## todo
 
-- [ ] Vergleichsliste (`ProductDialog` Edit-Modus): KI-Update per Freitext + Update-Prompt
-  - Einstieg (geklärt: im Bearbeiten-Dialog): bestehender `ProductDialog` (`frontend/src/components/ProductDialog.tsx`, Titel „Eintrag bearbeiten“, geöffnet aus `Compare.tsx`-Aktionen-Zeile via `setDialog({open: true, index})`) bekommt einen KI-Bereich mit Textfeld + „KI-Update“-Button; kein neuer Button in der `Aktionen`-Zeile, kein eigener Dialog
-  - Eingabe (geklärt: Paste-Box wie Inhalt-Einfügen): Muster aus `ManualContentDialog.tsx` übernehmen — verdeckte Paste-Box (nur Zeichenzahl sichtbar, kein angezeigter Text), Trimmen via `trimPastedForUpload` (`frontend/src/lib/manual-content.ts`), Provider-Dropdown `CrawlProviderSelect` (nur `extract`-Stage), Auswerten-Button („Auswerten & übernehmen“); kein simples sichtbares Textarea
-  - Kontext + Prompt (Update-Prompt): Freitext wird zusammen mit den vorhandenen Eintragsdaten (Name, Preis, Specs, Rating, Status, Notizen, Link) und einem neuen Update-Prompt ans LLM gesendet — neue Prompt-Datei neben `src/agent/prompts/product_extraction_prompt.md` (Extraktions-Prompt nur für Neuanlage, nicht wiederverwenden); der Prompt soll aus Text + Bestand sinnvolle Updates ableiten (z.B. Preis, Eigenschaften/Specs, Notizen)
-  - Merge (geklärt: nur befüllte Felder): LLM liefert Voll-Item, übernommen werden nur nicht-leere Felder in den bestehenden Eintrag (Rest bleibt); leere LLM-Felder löschen nichts; Speichern via bestehendem `mutate`-Muster (`handleSaveProduct` in `Compare.tsx`, Toast wie „Eintrag aktualisiert“)
-  - Bestand heute (nicht neu erfinden): Neuanlage-Pfade `POST /api/import-link` (URL-Crawl) + `POST /api/parse-text` (Freitext, `parseItemFromText` in `frontend/src/lib/api.ts`) speichern nichts selbst, Persistenz macht der Aufrufer via `mutate`; Edit-Modus zeigt heute nur das manuelle Formular (kein URL-Crawl, kein LLM); Backend-Endpunkte in `src/web/backend/server.js` (Zeilen ~351/383), Crawl-Provider via `GET /api/crawl-providers`
-  - Zu klären bei Umsetzung: neuer Backend-Endpunkt (z.B. `POST /api/update-item-from-text` mit `{text, item}`) oder `POST /api/parse-text` mit Bestandskontext erweitern; ob Merge client- oder serverseitig passiert; Specs-Format des LLM-Ergebnisses (`specs`-String via `serializeSpecsLines`/`specsStringToLines` aus `frontend/src/lib/spec-icons.ts`); Fehler-Toast bei LLM-Fehlschlag (Muster `toast.error('Auswertung fehlgeschlagen')`)
-  - Edge Cases: leerer/zu kurzer Text (Button disabled wie `pastedChars === 0`), LLM findet nichts Neues (kein `mutate`, Hinweis-Toast), Backend down / Provider nicht konfiguriert, Rating-Format `'⭐'.repeat(n)` + `parseRating` beibehalten (`frontend/src/lib/types.ts`)
-  - Akzeptanz: im „Eintrag bearbeiten“-Dialog Text einfügen → KI-Update → nur betroffene Felder (z.B. Preis, Specs) ändern sich, Rest bleibt; `npm test` grün, Frontend-Build ok
+- [ ] MCP-Client-First bereinigen: alte Crawl-Tools (`crawl_link` / `create_from_link`) & ungenutzte Crawl-Endpunkte entfernen
+  - Scope (geklärt): Der MCP-Client erledigt Web-Recherche und Extraktion komplett mit seinen eigenen Werkzeugen und übergibt strukturierte Daten direkt an die MCP-CRUD-Tools. Das Backend soll beim Eintragen nicht mehr selbst Webseiten crawlen.
+  - MCP (`packages/mcp/src/tools.js`, `packages/mcp/src/server.js`): `journey.crawl_link` und `journey.create_from_link` (inkl. `awaitParseJob`, `crawlPage`, `validateCrawlArgs`) entfernen; `packages/mcp/README.md` entsprechend kürzen.
+  - Backend (`src/web/backend/server.js`, `src/core/paste-clean.js`, `Dockerfile`, `docker-compose.yml`, `package.json`): prüfen und tote In-App-/MCP-Crawl-Pfade (`POST /api/import-link`, `POST /api/parse-text`, `POST /api/crawl-link`, `POST /api/suggest-journey`, `GET /api/crawl-providers`, `GET /api/import-jobs/:id`, `puppeteer`-Dependency/Chromium im Docker-Setup) entfernen — **wichtig:** die LLM-Provider-Aufrufschicht (`agy`, `remote-ai`, `local-cmd`) und die In-Memory-Worker-Queue (`src/web/backend/crawl-queue.js`) für den serverseitigen Property-Abgleich erhalten bzw. gezielt verschlanken.
+  - Tests & Tote Reste: `test/manual-content.test.js`, `test/paste-clean.test.js`, `test/crawl-providers.test.js`, `test/crawl-queue.test.js` und `package.json`-Testskript an den bereinigten Umfang anpassen (`needsContent`-Handling in `ProductCard`/`store` prüfen).
+  - Edge Cases: Sicherstellen, dass `GET /api/mcp-status` und `frontend/src/pages/Mcp.tsx` keine entfernten Tools mehr auflisten; bestehende Daten in `data/app.db` bleiben lesbar.
+  - Akzeptanz: Kein Server-Crawling mehr im MCP und keine ungenutzten Crawl-Routen im Backend; `npm test` grün, `npm run build` ok.
+
+- [ ] Server-KI-Abgleich für Item-Properties (`specs`): Synonyme vereinheitlichen & gemeinsame vs. Einzel-Eigenschaften ermitteln
+  - Ziel (geklärt): Der Client trägt Produkte frei mit seinen gewählten `specs` ein. Danach prüft der Server per KI-Call, ob unterschiedliche Property-Namen dasselbe meinen (z. B. `Weight` / `Gewicht` / `Gesamtgewicht` → einheitlicher Key) und welche Eigenschaften **alle Items** der Journey gemeinsam haben vs. welche nur bei **einzelnen Items** vorkommen.
+  - Auslöser & Timing (geklärt): Läuft **asynchron im Hintergrund nach jedem Item-Eintrag** (über `POST /api/data?journey=X`, wenn sich die `items` einer Journey mit ≥ 2 Produkten geändert haben — gilt damit für MCP `journey.add_item` wie auch manuelle Web-UI-Edits). Haupt-Request (`POST /api/data`) antwortet sofort ohne auf den LLM-Call zu warten.
+  - Backend-Queue & Loop-Schutz: Bestehende In-Memory-Queue (`src/web/backend/crawl-queue.js`, Concurrency/Debounce pro `(owner, slug)`) wiederverwenden; schreibt der Hintergrund-Job das Abgleichs-Ergebnis zurück, darf das keinen erneuten KI-Abgleich triggern (interner Speichervorgang statt rekursivem Trigger) und keine zwischenzeitlichen neueren Nutzer-Edits überschreiben (Hash/Timestamp-Vergleich der `items` vor Commit).
+  - KI-Call & stiller Fallback: Nutzt konfigurierte LLM-Provider (`agy`, `remote-ai`, `local-cmd` aus `src/web/backend/crawl-providers.js`, eigener Prompt + JSON-Schema in `src/agent/prompts/` und `src/web/backend/`). Ist kein Provider konfiguriert, gibt es < 2 Items oder schlägt der LLM-Call fehl: **stiller Fallback** (keine Fehlermeldung an den Client, keine Key-Umbenennung, rein deterministische Gruppierung nach exakt/case-insensitiv gleichen Keys).
+  - Datenmodell (`src/db/store.js`, `GET /api/data`):
+    - Synonyme Spec-Keys in `items.specs` auf kanonische Schreibweise vereinheitlichen (Reihenfolge/Werte erhalten).
+    - Vergleichs-Struktur (z. B. `specComparison: { commonKeys: string[], uniqueKeys: string[], updatedAt: string }` oder Spalte `spec_comparison` in `journeys` via Migration) speichern und in `GET /api/data` optional mitliefern.
+  - Live-Sync & UI (`frontend/src/pages/Compare.tsx`, `journey-data-context.tsx`):
+    - Nach Abschluss des Hintergrund-Abgleichs feuert das Backend `broadcastJourneyUpdate(owner, slug, …)` über SSE (`GET /api/data/events`), sodass geöffnete Browser den Toast/Reload erhalten.
+    - `Compare.tsx` teilt die dynamischen Spec-Zeilen in zwei klar beschriftete Bereiche: **Gemeinsame Eigenschaften** (bei allen Items befüllt) und **Weitere / Einzel-Eigenschaften** (nur bei einzelnen Items vorhanden); fehlt `specComparison`, greift derselbe deterministische Client-Fallback.
+  - Edge Cases: < 2 Items, Items ohne Specs, gleichzeitige MCP-`add_item`-Aufrufe in Serie (Debounce/Latest-wins pro Journey), Groß-/Kleinschreibung bei Keys, fehlender LLM-Provider.
+  - Akzeptanz: Nach Hinzufügen eines zweiten Items mit synonymen Specs werden Keys im Hintergrund vereinheitlicht, gemeinsame vs. Einzel-Eigenschaften berechnet und per SSE/Compare-UI sichtbar; Tests mit LLM-Stub in `test/` grün, `npm test` & `npm run build` ok.
+
+- [ ] Doku, Skill & Naming auf MCP-First angleichen (`README.md`, Obsidian-Vault, Skill & `bike`-Altlasten)
+  - Scope (geklärt): Gesamte Projektdokumentation und verbliebene Alt-Bezeichnungen auf den aktuellen **MCP-First**-Stand (mit Client-seitigem Eintragen + serverseitigem Property-Abgleich) ziehen — idealerweise als Abschluss nach Umsetzung der MCP-/Abgleich-Karten.
+  - `README.md` & `docs/vault/` (`Was-ist-JourneyPath.md`, `Architektur/Übersicht.md`, `Architektur/Backend.md`, `Architektur/Frontend.md`, `docs/local/MANUAL_TESTS.md`):
+    - Veraltete „URL-first in der Web-App“-, `ImportLinkForm`-, `ManualContentDialog`-, `CrawlProviderSelect`- und „Blockierte Seiten nachreichen“-Abschnitte entfernen bzw. durch den echten Ablauf ersetzen (Web-App = Übersicht/Vergleich/Pflege; KI-Client über MCP = Recherche + vollständiges CRUD + `journey.help`; Server = Storage, Auth, SSE + KI-Property-Abgleich).
+    - Vollständige aktuelle Tool-Liste, Endpunkte und Env-Variablen dokumentieren; `frontend/src/App.tsx`-Login-Gate-Verhalten für `/mcp` korrekt abbilden.
+  - Skill & CLI-Skripte (`.agents/skills/buying-journey-manager/SKILL.md`, `src/agent/scripts/`): auf MCP/REST-Workflow angleichen bzw. veraltete Direkt-DB-/Puppeteer-Crawl-Anweisungen (`crawl-and-extract.js`, `last-crawl.json`) bereinigen oder klar als Legacy markieren/entfernen.
+  - `bike`-Altlasten bereinigen: `SERVER_INFO.name` (`bike-buying-journey` → `journey-path` in `packages/mcp/src/tools.js` + Tests), `package.json` (`name`/`description`), Beispiel-Prompts & Standard-Servername in `frontend/src/pages/Mcp.tsx` und `README.md` (Achtung: in `Mcp.tsx` prüfen, ob `npx -y @journey-path/mcp` sinnvoll als Default bleibt oder lokaler Node-Pfad priorisiert werden sollte, solange das Paket nicht auf npm liegt).
+  - Akzeptanz: Keine Widersprüche mehr zwischen Doku, `Mcp.tsx`, Skill und tatsächlichem Code; keine veralteten Verweise auf gelöschte UI-Komponenten oder entfernte Crawl-Tools; `npm test` grün, `npm run build` ok.
 
 ## progress
 
 ## done
+
+- [ ] MCP-First Refactoring: In-App API-Triggers entfernt & MCP als primäre Schnittstelle verankert
+  - Ziel: Der angemeldete Nutzer bindet die App primär als MCP-Server in seinen KI-Assistenten (Claude Desktop, Cursor, Muse) ein. In der Web-App gibt es keinerlei Aktionen oder Buttons mehr, die externe Crawl- oder KI-API-Calls triggern.
+  - In-App API-Calls entfernt:
+    - `ImportLinkForm` und `ImportJobCard` aus Dashboard und Vergleich entfernt
+    - `ManualContentDialog` und "Inhalt einfügen"-Trigger entfernt
+    - URL-Crawl-Stufe und Crawl-Provider-Dropdowns aus `ProductDialog` entfernt (wird zum sauberen manuellen Formular: Name, Preis, Status, Bewertung, Specs, Link, Notizen)
+    - URL-First-Crawl-Stufe und Crawl-Provider-Dropdowns aus `CreateJourneyDialog` entfernt (wird zum sauberen manuellen Anlege-Dialog: Kürzel, Name, Kategorie, Beschreibung)
+    - Nicht mehr benötigte Frontend-Komponenten `ImportLinkForm`, `ImportJobCard`, `ManualContentDialog`, `CrawlProviderSelect` gelöscht
+    - `journey-data-context.tsx` von Job-Polling, Job-Queue und Stored-Jobs bereinigt
+    - `frontend/src/lib/api.ts` von `submitImportLink`, `submitParseText`, `pollImportJob`, `importItemFromLink`, `parseItemFromText`, `fetchCrawlProviders` bereinigt
+  - MCP primär für angemeldete Nutzer verankert:
+    - Frontend-API für API-Keys hinzugefügt (`fetchApiKeys`, `createApiKey`, `revokeApiKey`)
+    - `/mcp`-Seite zum vollständigen MCP-Hub ausgebaut:
+      - API-Key-Management (1-Klick-Generierung mit Klartext-Anzeige, Auflistung, Widerrufen)
+      - Fertig vorkonfigurierte Setup-Snippets mit automatisch eingefügtem MCP-Token (`claude_desktop_config.json`, Cursor `.cursor/mcp.json`, Muse, Shell/CLI) inklusive Pfad-Hilfe für macOS, Windows und Linux
+      - Status- & Tool-Explorer mit Anzeige aller MCP-Tools (`journey.get`, `journey.add_item`, `journey.crawl_link`, `journey.create_from_link`)
+      - Beispiel-Prompts zum Kopieren für die Interaktion mit dem KI-Assistenten
+    - Prominente MCP-Karte auf der Startseite (`JourneysOverview`) für angemeldete Nutzer
+    - MCP-Button im Header (`AppHeader`) hervorgehoben
+  - Verifikation: `npm test` 135/135 Tests grün (inkl. aller MCP- und Auth-Tests), `npm run build` erfolgreich.
+  - Erledigt 2026-10-22.
 
 - [ ] Crawl + LLM-Requests (`import-link` / `parse-text`): Queue mit Worker-Pool (2–3 parallel), Status in ProductCard, SSE-Update
   - Scope (geklärt: beide async): `POST /api/import-link` (Crawl+LLM) UND `POST /api/parse-text` (Copy-Text+LLM) auslagern — Main-Call darf nicht blockieren, nach Auftrag sofort Job anlegen und zurückgeben
@@ -147,6 +190,27 @@ kanban-plugin: board
   - Akzeptanz: eine Zeile statt Rating+Status+Erfahrungen; Klick auf Zelle öffnet Modal; Rating/Status/Kommentar speicherbar und in Tabelle sichtbar (Kommentar nirgends in Tabelle); Frontend-Build ok, `npm test` grün
   - Erledigt 2026-09-15: neue Komponente `frontend/src/components/RatingDialog.tsx` (shadcn-`Dialog`, `StarRatingInput` + Status-`Select` (`ITEM_STATUSES`) + Kommentar-`Textarea` für `item.notes`, Speichern-Button schreibt via `onSubmit`, Abbrechen verwirft; Form-Reset per Render-Phase-Update statt Effekt — keine neue Lint-Warnung); `frontend/src/pages/Compare.tsx`: Rating-/Status-/Erfahrungen-Zeilen ersetzt durch eine klickbare „Bewertung & Status“-Zeile (Sterne + Badge, ganze Zelle als Button mit Hover, Fokus-Ring, aria-label), neuer `ratingDialog`-State + `handleSaveRating` (ein `mutate`, Toast „Bewertung gespeichert“); `ProductDialog`/Dashboard unberührt. Keine neuen Unit-Tests (kein Frontend-Test-Setup; Backend unberührt); `npm test` 66/66 grün, Frontend-Build ok, `oxlint` 0 Errors (keine Warnungen in berührten Dateien). Manuelle Browser-Verifikation ausstehend, siehe `docs/local/MANUAL_TESTS.md`.
   - Nachtrag 2026-09-15 (Headless-Verifikation): isolierter Stack (Backend Port 1347 + Temp-DB, Frontend ohne Supabase-Keys damit Route-Guard offen) + Puppeteer: Tabelle zeigt eine „Bewertung & Status“-Zeile (Sterne über Badge, keine Rating-/Status-/Erfahrungen-Zeilen); Zell-Klick öffnet „Bewertung – <Name>“ mit vorbefüllten Sternen/Status/Kommentar; 5-Sterne-Klick + getippter Kommentar + Speichern persistiert (`⭐⭐⭐⭐⭐`, Status und Notizen per API verifiziert). Echte DB (2 Items) und Dev-Server (1337) unberührt, Test-Stack abgebaut.
+
+- [ ] MCP-Server (`packages/mcp`): Voll-CRUD für alle App-Bereiche & `journey.help`-Tool
+  - Scope (geklärt: Voll-CRUD): Der MCP-Server soll nicht mehr nur Journeys lesen und Items anlegen, sondern **alle Bereiche der App** über die REST-API steuern (Owner-isoliert via `MCP_AUTH_TOKEN`, kein Direkt-DB-Zugriff).
+  - Neues Hilfs-Tool `journey.help` (read-only): liefert strukturierte Übersicht über alle MCP-Tools, typische Workflows (z.B. Liste anlegen → selbst recherchieren → Items & Specs eintragen → Status/Tagebuch/Budget pflegen), erlaubte Enums (`ITEM_STATUSES`, `PHASES`) und Konventionen für `specs`-Keys.
+  - Journeys:
+    - `journey.list`: liest `GET /api/journey-configs` (Slugs, Anzeigenamen, Kategorien, Beschreibungen — damit der Agent existierende Listen kennt).
+    - `journey.create`: legt neue Journey ohne Link an (`POST /api/journeys` mit `slug` + optional `name`, `category`, `description`, `currency`, `phase`, `budget`, `targetDate`, `generalNotes`).
+    - `journey.update_config`: partielles Update von `name`, `description`, `category`, `currency`, `sectionTitle`, `listTitle` via `PUT /api/journey-config?journey=X` (vorher Existenz per `assertKnownJourney` prüfen, kein stilles Anlegen).
+    - `journey.delete`: löscht eine Journey per neuem Backend-Endpunkt `DELETE /api/journeys?journey=X` (in `src/web/backend/server.js` + `store.deleteJourney(slug, owner)` in `src/db/store.js`; FK `ON DELETE CASCADE` räumt Items/Logs/Specs auf; unbekannter Slug → `404`, kein `ensureOwnedJourney`).
+  - Items (`GET`/`POST /api/data?journey=X`):
+    - `journey.get` (unverändert) und `journey.add_item` (Upsert per Name, behalten).
+    - `journey.delete_item`: entfernt ein Item anhand des Namens (case-insensitiv) aus `items` und speichert via `POST /api/data` (löst automatisch SSE-Update aus).
+  - Journey-Details (`GET`/`POST /api/data?journey=X` bzw. `/api/feedback`):
+    - `journey.update_meta`: aktualisiert `status` (`phase`, `budget`, `targetDate`) und/oder `generalNotes`.
+    - `journey.add_log` / `journey.delete_log`: Tagebucheinträge (`date`, `event`) anlegen (absteigend nach Datum sortieren wie `Dashboard.tsx`) bzw. per Index/Datum+Text löschen.
+    - `journey.set_spec` / `journey.delete_spec`: journey-weite Eigenschaften (`/eigenschaften`, `journey_specs`: `label`, `value`) anlegen/aktualisieren/löschen.
+    - `journey.set_feedback`: schreibt Markdown-Feedback via bestehendem `POST /api/feedback?journey=X` (oder ergänzt `POST /api/feedback` um SSE-Hinweis bei Bedarf).
+  - Bestand & Sync: `packages/mcp/src/tools.js` bleibt Single Source of Truth für `src/mcp/tools.js` und `GET /api/mcp-status`; `frontend/src/pages/Mcp.tsx` zeigt die neuen Tools automatisch an (Beispiel-Prompts dort ggf. an neue Tools anpassen).
+  - Edge Cases: `assertKnownJourney` vor jedem Schreibzugriff (kein stilles Anlegen bei Tippfehler im Slug), leerer/ungültiger Slug → JSON-RPC `-32602`, unbekanntes Item/Log beim Löschen → klarer `isError`-Fehler, `DELETE /api/journeys` mit Owner-Trennung.
+  - Akzeptanz: Alle genannten Tools sind über `tools/list` verfügbar und per `tools/call` gegen das Backend durchgetestet (`test/mcp.test.js`, `test/server.test.js`, `test/store.test.js`); `npm test` grün, `npm run build` ok.
+  - Erledigt 2026-11-24: `src/db/store.js` (`deleteJourney` mit Cascade + Owner-Trennung) und `src/web/backend/server.js` (`DELETE /api/journeys?journey=X`, 200/400/404 ohne `bike`-Fallback); `packages/mcp/src/tools.js` und `packages/mcp/src/server.js` um `journey.help`, `journey.list`, `journey.create`, `journey.update_config`, `journey.delete`, `journey.delete_item`, `journey.update_meta`, `journey.add_log`, `journey.delete_log`, `journey.set_spec`, `journey.delete_spec` und `journey.set_feedback` erweitert (vereinheitlichtes `requestJson`/`mutateJourneyData`/`requireSlug`); `frontend/src/pages/Mcp.tsx` Beispiel-Prompts aktualisiert (`POST /api/feedback` bewusst ohne SSE belassen, da `test/sse.test.js` das festlegt). Verifikation: `test/store.test.js` (+1 Test), `test/server.test.js` (+1 Test) und `test/mcp.test.js` (+3 End-to-End-Tests + `GET /api/mcp-status`-Update) grün (`npm test`: 140/140 + 11/11 bestanden), `npm --prefix frontend run build` erfolgreich, `npm --prefix frontend run lint` (`oxlint`) 0 Errors (10 vorbestehende Warnungen in unberührten Dateien). Manuelle Browser-Verifikation ausstehend, siehe `docs/local/MANUAL_TESTS.md`.
 
 ## waiting
 

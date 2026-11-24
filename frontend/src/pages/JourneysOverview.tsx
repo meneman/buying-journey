@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faArrowRight, faPlus } from '@fortawesome/free-solid-svg-icons'
+import { faArrowRight, faPlug, faPlus } from '@fortawesome/free-solid-svg-icons'
 import { Link } from '@/components/Link'
 import { CreateJourneyDialog } from '@/components/layout/CreateJourneyDialog'
 import { Button } from '@/components/ui/button'
@@ -108,6 +108,33 @@ export function JourneysOverview() {
 
   return (
     <div className="flex flex-col gap-6">
+      <Card className="border-celeste/40 bg-gradient-to-r from-celeste/10 via-background to-card shadow-sm">
+        <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3.5">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-celeste/20 text-celeste">
+              <FontAwesomeIcon icon={faPlug} className="size-5" />
+            </span>
+            <div className="flex flex-col gap-1">
+              <h3 className="font-heading font-semibold text-foreground">
+                App als MCP-Server in deine KI einbinden
+              </h3>
+              <p className="max-w-xl text-sm text-muted-foreground">
+                Verbinde Claude Desktop, Cursor oder Muse mit deinen persönlichen Kaufreisen. Dein KI-Assistent recherchiert Produkte, vergleicht Specs und pflegt alles direkt per Chat ein.
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="default"
+            size="sm"
+            className="shrink-0 gap-2 font-medium"
+            onClick={() => navigate('/mcp')}
+          >
+            <FontAwesomeIcon icon={faPlug} className="size-3.5" />
+            MCP-Setup öffnen
+          </Button>
+        </CardContent>
+      </Card>
+
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-heading text-lg font-semibold">Meine Kaufreisen</h2>
         <Button size="sm" onClick={() => setCreateOpen(true)}>

@@ -37,7 +37,7 @@ Das Frontend liegt in `frontend/` (Vite + React + TypeScript + shadcn/ui), das B
    ```bash
    npm run dev
    ```
-   Startet Backend (Port `3000`) und Vite-Dev-Server (Port `5173`) gleichzeitig; der Dev-Server leitet `/api`-Aufrufe an das Backend weiter. Öffne [http://localhost:5173](http://localhost:5173).
+   Startet Backend (Port `3000`) und Vite-Dev-Server (Port `3300`) gleichzeitig; der Dev-Server leitet `/api`-Aufrufe an das Backend weiter. Öffne [http://localhost:3300](http://localhost:3300).
 
 4. **Produktion:**
    ```bash
@@ -67,7 +67,7 @@ Alle `/api`-Daten-Routen verlangen eine Identität (401 ohne gültigen Bearer-To
 Einmalig im [Supabase-Dashboard](https://supabase.com/dashboard) einrichten (Details siehe `.env.example`):
 
 1. **Authentication → Providers:** Google (Client ID/Secret aus der Google Cloud Console) und/oder Apple (Services ID, Team ID, Key ID, Private Key aus dem Apple Developer Portal) aktivieren. Callback-URL dort jeweils: `https://<projekt>.supabase.co/auth/v1/callback`.
-2. **Authentication → URL Configuration:** Site URL = Produktions-Origin; unter Additional Redirect URLs `http://localhost:5173/login` (Dev) und `<Produktions-Origin>/login` eintragen — die App kehrt nach dem OAuth-Flow auf `/login` zurück.
+2. **Authentication → URL Configuration:** Site URL = Produktions-Origin; unter Additional Redirect URLs `http://localhost:3300/login` (Dev) und `<Produktions-Origin>/login` eintragen — die App kehrt nach dem OAuth-Flow auf `/login` zurück.
 
 Solange ein Anbieter im Dashboard deaktiviert ist, schlägt sein Button mit einer Fehlermeldung auf der Login-Seite fehl (statt still zu laden).
 

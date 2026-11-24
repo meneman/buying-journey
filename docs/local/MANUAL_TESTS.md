@@ -1,49 +1,11 @@
-# Manuelle Tests — Crawl-Queue-Worker (2026-09-18)
+# Manuelle Tests — MCP-Server Voll-CRUD & `journey.help` (2026-11-24)
 
-Bitte `npm run dev` selbst starten (Backend auf Port `3000` per `.env`,
-Vite-Dev-Server auf Port `5173`, `/api`-Aufrufe werden proxied).
-Danach http://localhost:5173 im Browser öffnen. Backend-Logs im Auge
-behalten (`[import-link]`-/`[parse-text]`-Kennzahlen pro Job).
+Bitte `npm run dev` selbst starten (Backend auf Port `3000`, Vite-Dev-Server auf Port `3300`, `/api`-Aufrufe werden proxied).
+Danach http://localhost:3300/mcp im Browser öffnen (vorher einloggen).
 
-## Link-Import als Queue-Job (Dashboard, `/?journey=bike`)
+## `/mcp`-Seite (Tool-Explorer & Beispiel-Prompts)
 
-- [ ] Produkt-Link einfügen → „Importieren“: Das Eingabefeld leert sich sofort,
-      unter dem Formular erscheint eine Job-Karte („Wird importiert…“ oder
-      „Wartet — Position N“) — kein blockierender Spinner mehr.
-- [ ] 3 Links schnell hintereinander importieren: max. 2 Jobs laufen, der
-      dritte zeigt „Wartet — Position 1“ (Default-Concurrency 2).
-- [ ] Fertigstellung ohne Reload: Das Item erscheint automatisch in der Liste,
-      Toast „per Link importiert“ erscheint (SSE-Event, kein manueller Reload).
-- [ ] Blockierte Seite (z.B. Bot-Schutz): Es entsteht der markierte Platzhalter
-      („Crawl blockiert — Platzhalter angelegt“), zusätzlich bleibt die
-      Fehler-Job-Karte mit Fehlertext sichtbar.
-- [ ] Fehler-Job-Karte → „Erneut versuchen“: legt einen neuen Job an
-      (Job-Karte wechselt zurück auf „Wird importiert…“); „Verwerfen“ entfernt
-      die Karte, das Item bleibt unberührt.
-
-## Manueller Inhalt (Platzhalter-Karte)
-
-- [ ] Auf einer Platzhalter-Karte „Inhalt einfügen“ → Seiteninhalt per Strg+V
-      einfügen → „Auswerten & übernehmen“: Der Dialog schließt sofort, die Karte
-      zeigt „Wird ausgewertet…“ (ggf. mit Warteposition).
-- [ ] Fertigstellung ohne Reload: Die Karte übernimmt die ausgewerteten Felder
-      automatisch, Toast „Inhalt übernommen“ erscheint.
-- [ ] Fehlgeschlagene Auswertung: Die Karte zeigt den Fehlertext + „Erneut
-      einfügen“ (öffnet den Dialog erneut); auf der Vergleichs-Seite
-      (`/vergleich`) gilt dasselbe im Overlay der blockierten Spalte.
-
-## Neustart / Reload / Reconnect
-
-- [ ] Backend während wartender Jobs neu starten: Die nächste Abfrage zeigt
-      Toast „Import-Job verworfen“ mit Erneut-anfragen-Hinweis (GET → 404).
-- [ ] Browser-Reload mit wartendem Job: Nach dem Laden wird der Job per
-      `GET /api/import-jobs/:id` nachgeladen (Karte erscheint wieder, Ergebnis
-      wird bei Fertigstellung übernommen, ohne Doppel-Eintrag).
-- [ ] Zweiter Tab gleiche Journey: Fertigstellung toastet dort ebenfalls
-      (eigener SSE-Stream pro Tab); fremde Journey bleibt still.
-
-## Heim-Dialog (manuelle Einträge per URL)
-
-- [ ] „Eintrag hinzufügen“ → „Per URL hinzufügen“ → Crawlen: Dialog wartet mit
-      Spinner wie bisher und speichert danach direkt (Polling statt
-      Server-Block, Verhalten unverändert inkl. Platzhalter-Fallback).
+- [ ] Unter „4. Server-Status & Verfügbare Tools“ ist der Status grün (`Backend erreichbar`).
+- [ ] In der Tool-Liste erscheinen alle neuen CRUD-Tools plus `journey.help` (`journey.help`, `journey.list`, `journey.create`, `journey.update_config`, `journey.delete`, `journey.get`, `journey.add_item`, `journey.delete_item`, `journey.update_meta`, `journey.add_log`, `journey.delete_log`, `journey.set_spec`, `journey.delete_spec`, `journey.set_feedback`) mit Beschreibung und Pflichtparametern.
+- [ ] Bei `journey.help` und `journey.list` wird kein leeres Pflichtparameter-Badge angezeigt (`required: []`).
+- [ ] Unter „3. Prompts für deinen KI-Assistenten“ zeigen die 3 Karten die aktualisierten Beispiel-Prompts (inkl. `journey.help`, Auflisten/Anlegen und Status-/Tagebuch-Update) und lassen sich per „Prompt kopieren“ in die Zwischenablage kopieren.

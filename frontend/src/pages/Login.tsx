@@ -44,7 +44,7 @@ const PROVIDER_ICON: Record<OAuthProvider, () => React.JSX.Element> = {
 }
 
 export function Login() {
-  const { user, loading, configured, signIn, signUp, signInWithProvider, signOut } = useAuth()
+  const { user, loading, signIn, signUp, signInWithProvider, signOut } = useAuth()
   const { navigate, search } = useRouter()
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
   const [email, setEmail] = useState('')
@@ -60,22 +60,6 @@ export function Login() {
       <div className="mx-auto max-w-md py-16">
         <Card>
           <CardContent>Lädt…</CardContent>
-        </Card>
-      </div>
-    )
-  }
-
-  if (!configured) {
-    return (
-      <div className="mx-auto max-w-md py-16">
-        <Card>
-          <CardHeader>
-            <CardTitle>Anmeldung nicht verfügbar</CardTitle>
-            <CardDescription>
-              Es ist kein Supabase-Key hinterlegt. Lege `VITE_SUPABASE_ANON_KEY` in `frontend/.env`
-              an (siehe `.env.example` im Projekt-Root) und starte den Dev-Server neu.
-            </CardDescription>
-          </CardHeader>
         </Card>
       </div>
     )
