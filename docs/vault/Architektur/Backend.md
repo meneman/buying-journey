@@ -1,6 +1,6 @@
 # Backend — JourneyPath 🏗️
 
-> Code: `src/` (Node.js, Express 4) · DB: `data/app.db` (SQLite via `node:sqlite`) · Einstieg: `src/web/backend/server.js`
+> Code: `src/` & `packages/mcp/` (Node.js, Express 4) · DB: `data/app.db` (SQLite via `node:sqlite`) · Einstieg: `src/web/backend/server.js`
 > Siehe auch: [[Übersicht]] · [[Frontend]] · [[Was-ist-JourneyPath]]
 
 ## 1. Überblick
@@ -8,29 +8,35 @@
 ```
 src/
 ├── web/backend/
-│   ├── server.js                   # Express-App, alle /api-Routen, SSE, Static-Hosting
-│   ├── auth.js                     # Identität: API-Key + Supabase-JWT (requireUser/authGate/…)
-│   ├── crawl-providers.js          # zweistufige Crawl-Pipeline (Parse-Tool + LLM-Auswertung)
-│   ├── crawl-product-schema.json   # JSON-Schema für die Produkt-Extraktion (agy --json-schema)
-│   └── journey-naming-schema.json  # JSON-Schema für die Journey-Benennung
+│   ├── server.js                    # Express-App, alle /api-Routen, SSE, Static-Hosting, Trigger für Property-Abgleich
+│   ├── auth.js                      # Identität: API-Key + Supabase-JWT (requireUser/optionalAuth/authGate)
+│   ├── spec-alignment.js            # KI-Property-Abgleich + stiller deterministischer Fallback
+│   ├── spec-alignment-schema.json   # JSON-Schema für den Property-Abgleich (agy --json-schema)
+│   ├── crawl-queue.js               # In-Memory-Worker-Queue + Debounce/Latest-wins pro (owner, slug)
+│   └── crawl-providers.js           # LLM-Provider-Aufrufschicht (agy, remote-ai, local-cmd)
 ├── db/
-│   └── store.js    # einzige DB-Schicht: openDatabase(), Schema, Migrationen, CRUD, JSON1, API-Keys
+│   └── store.js                     # einzige DB-Schicht: openDatabase(), Schema, Migrationen, CRUD, JSON1, API-Keys
 ├── core/
-│   ├── item-format.js  # starsFromRating(), specsToString()
-│   └── paste-clean.js  # cleanPastedContent(): eingefügtes HTML/Text für das LLM putzen
+│   └── item-format.js               # starsFromRating(), specsToString()
 ├── mcp/
-│   ├── server.js   # MCP-stdIO-Server
-│   └── tools.js    # TOOL_DEFS (Single Source of Truth, auch für GET /api/mcp-status)
+│   ├── server.js                    # Re-Export-Wrapper auf packages/mcp/src/server.js
+│   └── tools.js                     # Re-Export-Wrapper auf packages/mcp/src/tools.js
 └── agent/
-    ├── scripts/    # add-item.js, add-log.js, crawl-and-extract.js, create-api-key.js, utils.js
-    ├── prompts/    # product_extraction_prompt.md, journey_naming_prompt.md
-    └── temp/       # last-crawl.json
+    ├── prompts/
+    │   └── spec_alignment_prompt.md # Prompt für den serverseitigen Property-Abgleich
+    └── scripts/                     # create-api-key.js sowie Legacy-SQLite-CLIs (add-item.js, add-log.js, utils.js)
+
+packages/mcp/
+├── bin/journey-path-mcp.js          # Binär-Einstiegspunkt für @journey-path/mcp
+└── src/
+    ├── server.js                    # stdio-MCP-Server (JSON-RPC 2.0, 0 Dependencies)
+    └── tools.js                     # SERVER_INFO ('journey-path') & TOOL_DEFS (Single Source of Truth für /api/mcp-status)
 ```
 
 - **Kein ORM.** Alles SQL steht in `src/db/store.js`.
-- **Start:** `npm run dev` (Backend + Vite `:3300`), `npm start` (Backend serviert `frontend/dist`), `npm test`, `npm run mcp`.
-- **Port:** Code-Default `3000` (`process.env.PORT || 3000`); `.env.example` und der Vite-Proxy nutzen `1337`.
-- **Config:** `.env` — `PORT`, `DB_PATH` (Default `data/app.db`), `CRAWL_*` (§6), `N8N_WEBHOOK_URL`, `SUPABASE_URL` / `SUPABASE_ANON_KEY`, `AUTH_REQUIRED`.
+- **Start:** `npm run dev` (Backend `:3000` + Vite `:1337`), `npm start` (Backend serviert `frontend/dist`), `npm test`, `npm run mcp`.
+- **Port:** Code-Default `3000` (`process.env.PORT || 3000`); `.env` setzt `1337` für `npm start`, `npm run dev` nutzt `PORT=3000` + Vite `:1337` — der Browser-Einstieg ist immer `http://localhost:1337`.
+- **Config:** `.env` — `PORT`, `DB_PATH` (Default `data/app.db`), `FRONTEND_DIST`, `CRAWL_EXTRACT_PROVIDER` / `CRAWL_PROVIDER`, `CRAWL_AGY_*`, `CRAWL_REMOTE_*`, `CRAWL_EXTRACT_CMD`, `CRAWL_QUEUE_CONCURRENCY` (Default `2`), `SPEC_ALIGNMENT_DEBOUNCE_MS` (Default `300`), `SUPABASE_URL`, `SUPABASE_ANON_KEY` / `SUPABASE_PUBLISHABLE_KEY`, `AUTH_REQUIRED`.
 
 ## 2. Datenstruktur (SQLite)
 
@@ -46,10 +52,10 @@ Alle Journey-Tabellen tragen ein **`owner_id`** — Journeys sind pro User getre
 |---|---|---|
 | `owner_id` | TEXT NOT NULL | Besitzer (Supabase-User-ID bzw. API-Key-User) |
 | `slug` | TEXT NOT NULL | Journey-Kürzel, z. B. `bike` (URL-Param `?journey=`) |
-| `name` | TEXT NOT NULL `''` → Backfill `= slug` | Anzeigename (Config) |
+| `name` | TEXT NOT NULL `''` | Anzeigename (Config) |
 | `description` | TEXT NOT NULL `''` | Config, max. 500 Zeichen |
 | `category` | TEXT NOT NULL `''` | Config, lowercase (`fahrrad`, `laptop`, …), max. 40 |
-| `currency` | TEXT NOT NULL `''` → Backfill `€` | Config, max. 10 |
+| `currency` | TEXT NOT NULL `''` | Config, max. 10 |
 | `section_title` | TEXT NOT NULL `Items Under Consideration` | Anzeige-Setting |
 | `list_title` | TEXT NOT NULL `Spezifikationen` | Anzeige-Setting, z. B. `Rahmengrößen` |
 | `phase` | TEXT NOT NULL `Planning` | Status-Phase (`Planning`, `Researching`, `Test Riding`, `Comparing`, `Decision`, `Purchased`) |
@@ -57,9 +63,10 @@ Alle Journey-Tabellen tragen ein **`owner_id`** — Journeys sind pro User getre
 | `target_date` | TEXT NOT NULL `''` | Freitext-Datum |
 | `general_notes` | TEXT NOT NULL `''` | Allgemeine Notizen (Markdown) |
 | `feedback` | TEXT NOT NULL `''` | Feedback-Seite (Markdown) |
+| `spec_comparison` | TEXT NOT NULL `''` | JSON `{ commonKeys, uniqueKeys, updatedAt }` des Property-Abgleichs |
 | `created_at` / `updated_at` | TEXT `datetime('now')` | Auto-Stempel |
 
-Migrationen laufen beim Öffnen: `ensureConfigColumns()` rüstet die Config-Spalten per `ALTER TABLE` nach, `backfillConfigDefaults()` füllt leere `name`/`currency`, ein `PRAGMA table_info(items)`-Check ergänzt `needs_content`. `ensureJourney('bike', owner)` legt die Default-Journey im Namensraum des Owners an.
+Migrationen beim Öffnen: Ältere Tabellen ohne `owner_id` werden verworfen; bestehende `journeys`-Tabellen ohne `spec_comparison` sowie `items`-Tabellen ohne `needs_content` werden per `ALTER TABLE` nachgerüstet. `ensureOwnedJourney(slug, owner)` legt fehlende Journeys im Namensraum des Owners mit `defaultJourneyRow(slug)` an.
 
 ### 2.2 `journey_logs` — Reisetagebuch
 
@@ -70,7 +77,7 @@ Migrationen laufen beim Öffnen: `ensureConfigColumns()` rüstet die Config-Spal
 | `date` / `event` | TEXT `''` |
 | `position` | INTEGER `0` (Sortierung) |
 
-Index: `(owner_id, journey_slug, position)`. Sortierung immer `ORDER BY position, id`.
+Index: `(owner_id, journey_slug, position)`. Sortierung: `ORDER BY position, id`.
 
 ### 2.3 `journey_specs` — journey-weite Eigenschaften
 
@@ -90,10 +97,10 @@ Spalten: `id`, `owner_id`, `journey_slug`, `label`, `value`, `position`. Index: 
 | `notes` | TEXT `''` | Pro/Contra, Freitext |
 | `link` | TEXT `''` | Produkt-URL |
 | `specs` | TEXT `'[]'` + `CHECK (json_valid(specs))` | **Schemalose Vergleichsattribute als JSON-Array** (s. u.) |
-| `needs_content` | INTEGER `0` | **1 = Platzhalter**: Auto-Crawl war blockiert, Inhalt muss manuell nachgereicht werden (§6.4) |
+| `needs_content` | INTEGER `0` | Legacy-Spalte für Altdaten in `data/app.db` (wird nicht mehr an API/UI ausgeliefert) |
 | `position` | INTEGER `0` | Sortierung |
 
-Index: `(owner_id, journey_slug, position)`. Im Wire-Format erscheint das Flag nur, **wenn gesetzt** (`needsContent: true`) — für normale Items bleibt das JSON unverändert.
+Index: `(owner_id, journey_slug, position)`.
 
 ### 2.5 `items.specs` — schemaloses JSON-Format
 
@@ -104,8 +111,8 @@ Gespeichert als JSON-Array von Paaren, damit **Reihenfolge + Freitext** erhalten
 ```
 
 - **Wire-Format (REST):** `<br>`-verbundener String: `"Gewicht: 8.1 kg <br> Rahmen: Carbon"`. Konvertierung an der Speichergrenze: `specsStringToJson()` / `specsJsonToString()` in `store.js`.
-- **Regeln:** Trennung am **ersten** Doppelpunkt; Zeilen ohne Doppelpunkt → `{k: null}` = Freitext, erzeugt **keine** Vergleichszeile. Schlüssel case-insensitiv zusammengeführt (`Akku` = `akku`), Anzeige behält Erstschreibweise.
-- **Abfrage:** `store.specValues(slug, key)` nutzt `json_each` + `json_extract(j.value, '$.k'/'$.v')` mit `lower()`-Vergleich.
+- **Regeln:** Trennung am **ersten** Doppelpunkt; Zeilen ohne Doppelpunkt → `{k: null}` = Freitext, erzeugt **keine** Vergleichszeile.
+- **Abfrage:** `store.specValues(slug, owner, key)` nutzt `json_each` + `json_extract(j.value, '$.k'/'$.v')` mit `lower()`-Vergleich.
 
 ### 2.6 `api_keys` — langlebige Keys für den MCP-Zugriff
 
@@ -113,109 +120,80 @@ Gespeichert als JSON-Array von Paaren, damit **Reihenfolge + Freitext** erhalten
 
 ## 3. Store-API (`src/db/store.js`)
 
-`openDatabase(pfad?)` → `{ path, listJourneys, listJourneyConfigs, getJourneyConfig, saveJourneyConfig, createJourney, getJourneyData, saveJourneyData, getFeedback, saveFeedback, specValues, hashApiKey, isApiKeyFormat, createApiKey, listApiKeys, revokeApiKey, findApiKeyOwner, close }`
+`openDatabase(pfad?)` → `{ path, listJourneys, listJourneyConfigs, getJourneyConfig, saveJourneyConfig, createJourney, deleteJourney, getJourneyData, getItemsSnapshot, saveJourneyData, applySpecAlignment, computeItemsHash, getFeedback, saveFeedback, specValues, hashApiKey, isApiKeyFormat, createApiKey, listApiKeys, revokeApiKey, findApiKeyOwner, close }`
 
-- `getJourneyData(slug, owner)` — Volldokument (lazy-create): `{ status{phase,budget,targetDate}, journey[], items[] (specs als String, optional needsContent), specs[], generalNotes, headers[], sectionTitle, listTitle }`.
-- `saveJourneyData(slug, data, owner)` — Voll-Replace in Transaktion (DELETE + INSERT pro Kindtabelle).
-- `saveJourneyConfig(slug, patch, owner)` — partiell, nur `name/description/category/currency/sectionTitle/listTitle`, validiert Typ + `CONFIG_LIMITS`; Fehlercodes `CONFIG_UNKNOWN_FIELD` / `CONFIG_INVALID` → API 400.
-- `createJourney(slug, fields, owner)` — strikt, kein Lazy-Create; Duplikat → `JOURNEY_EXISTS` → API 409.
-- API-Key-Funktionen: Erzeugen (Klartext genau einmal), Auflisten, Widerrufen, Owner-Auflösung per Hash.
+- `getJourneyData(slug, owner)` — Volldokument (lazy-create): `{ status{phase,budget,targetDate}, journey[], items[], specs[], generalNotes, headers[], sectionTitle, listTitle, specComparison? }`.
+- `saveJourneyData(slug, owner, data, options?)` — Voll-Replace in Transaktion; mit `preserveSpecComparison: true` bleibt `spec_comparison` bei reinen Nicht-Item-Updates erhalten.
+- `applySpecAlignment(slug, owner, { expectedItemsHash, updatedSpecsByIndex?, specComparison })` — atomarer interner Commit mit Hash-Prüfung (verwirft veraltete Ergebnisse bei zwischenzeitlichen Edits) und ohne Rekursions-Trigger.
+- `createJourney(slug, owner, fields)` — strikt, kein Lazy-Create; Duplikat → `JOURNEY_EXISTS` → API `409`.
+- `deleteJourney(slug, owner)` — löscht die Journey inkl. abhängiger Zeilen (`ON DELETE CASCADE`).
 
 ## 4. REST-API (`src/web/backend/server.js`)
 
-Alle Daten-Routen hängen hinter **`needUser`** (`requireUser(store)`, §5) — ohne gültige Identität 401, unabhängig von `AUTH_REQUIRED`. `?journey=` wird via `getJourney()` sanitisiert (erstes gewinnt, nur `[a-zA-Z0-9.-]`, Fallback `bike`).
+Alle Daten-Routen hängen hinter **`needUser`** (`requireUser(store)`, §5) — ohne gültige Identität `401`, unabhängig von `AUTH_REQUIRED`. `?journey=` wird via `getJourney()` sanitisiert (erstes gewinnt, nur `[a-zA-Z0-9.-]`, Fallback `bike`). Ausnahme `DELETE /api/journeys?journey=X`: verlangt einen explizit gültigen Slug (`400` ohne `bike`-Fallback).
 
 | Methode + Pfad | Funktion |
 |---|---|
 | `GET /api/config` | `{ storage: 'sqlite' }` (öffentlich) |
-| `GET /api/mcp-status` | MCP-Name/Version/Protokoll + Tool-Liste inkl. `inputSchema` aus `tools.js` (öffentlich) |
-| `GET /api/me` | Verifizierter Nutzer oder 401 (`optionalAuth`) |
+| `GET /api/mcp-status` | MCP-Name/Version/Protokoll + Tool-Liste inkl. `inputSchema`, `serverFile`, `packageName`, `port`, `baseUrl` (öffentlich) |
+| `GET /api/me` | Verifizierter Nutzer oder `401` (`optionalAuth`) |
 | `POST` / `GET` / `DELETE /api/api-keys[/:id]` | API-Keys anlegen (Klartext einmalig) / auflisten / widerrufen |
 | `GET /api/journeys` | Slug-Liste des Owners, sortiert |
-| `POST /api/journeys` | Anlegen, 201 `{success, slug}`, 409 bei Duplikat, 400 bei invalide |
+| `POST /api/journeys` | Anlegen, `201 {success, slug}`, `409` bei Duplikat, `400` bei invalide |
+| `DELETE /api/journeys?journey=X` | Löschen (`200 {success, slug}`, `404` wenn unbekannt, `400` bei fehlendem/ungültigem Slug) |
 | `GET /api/journey-configs` | Alle Configs für die Startseite (ohne Items/Logs) |
 | `GET` / `PUT /api/journey-config?journey=X` | Eine Config lesen (lazy-create) / partiell schreiben |
-| `GET /api/data?journey=X` | Volldokument (lazy-create) |
-| `POST /api/data?journey=X` | Voll-Replace + SSE-Broadcast |
-| `GET /api/data/events?journey=X` | SSE-Stream (`journey-updated`, `retry: 5000`, Heartbeat `: heartbeat`) |
-| `GET` / `POST /api/feedback` | `{content}` lesen / schreiben |
-| `GET /api/crawl-providers` | Liste beider Crawl-Stufen mit `{stage, name, description, configured, active}` (bewusst hinter Login — sonst wären interne Endpunktnamen ausgeloggt sichtbar) |
-| `POST /api/import-link?journey=X` | `{link, provider?, fetcher?}` → zweistufiger Crawl → `{item, provider, fetcher, meta}` (speichert **nicht**) |
-| `POST /api/parse-text?journey=X` | `{text, link?, provider?}` → LLM-Auswertung **ohne** Fetch-Stufe → `{item, provider, meta}` (speichert **nicht**) |
-| `POST /api/suggest-journey` | `{url\|link, title, text, provider?}` → `{slug, name, category, provider, meta}` — Journey-Benennung, speichert **nicht** |
+| `GET /api/data?journey=X` | Volldokument (lazy-create, optional mit `specComparison`) |
+| `POST /api/data?journey=X` | Voll-Replace + SSE-Broadcast + asynchroner Property-Abgleich bei geänderten Items (`>= 2` Produkte mit Specs) |
+| `GET /api/data/events?journey=X` | SSE-Stream (`ready`, `journey-updated` mit optionalem `reason: "property-sync"`, `retry: 5000`, Heartbeat `: heartbeat`) |
+| `GET` / `POST /api/feedback?journey=X` | `{content}` lesen / schreiben |
 
-Sonstiges: `express.json({limit: '1mb'})` (400 bei kaputtem JSON, 413 bei zu groß), `GET *` → SPA-Fallback auf `frontend/dist/index.html` bzw. 404-JSON unter `/api/`. Jeder Import schreibt eine Kennzahlen-Logzeile (`[import-link] …`, `[parse-text] …`, `[crawl] …`) — Zeiten, Größen, Fallbacks, **keine Inhalte**.
+Sonstiges: `express.json({limit: '1mb'})` (`400` bei kaputtem JSON, `413` bei zu groß), `app.all('/api/*', 404)` für einheitliches JSON-404 sowie `GET *` als SPA-Fallback auf `frontend/dist/index.html`.
 
 ## 5. Auth & Owner-Trennung (`src/web/backend/auth.js`)
 
-Zwei Token-Arten, beide als `Authorization: Bearer …` (SSE-Fallback `?token=` / `?access_token=`, da `EventSource` keine Header kann):
+Zwei Token-Arten, beide als `Authorization: Bearer …` (SSE-Fallback `?token=` / `?access_token=`, da `EventSource` keine Header senden kann):
 
-- **API-Key** — Format `bj_` + 64 Hex-Zeichen, langlebig, gedacht für den MCP. In der DB liegt nur der SHA-256-Hash (`api_keys`). Erzeugen per CLI ohne laufenden Server: `node src/agent/scripts/create-api-key.js --user "jakob" --name "Muse MCP"`.
-- **Supabase-JWT** — Browser-Login (Google / Apple / E-Mail+Passwort), verifiziert per `auth.getUser(token)` (Netzwerk); Ergebnis als `req.user = { id, email, appMetadata, userMetadata, aud }`.
-
-Middleware:
-
-- **`requireUser(store)` (= `needUser`)** — das Tor für alle Daten-Routen: löst API-Key **oder** JWT auf, sonst 401. Gilt immer, **unabhängig von `AUTH_REQUIRED`**, denn ohne Identität greift die Owner-Trennung nicht.
-- `optionalAuth` — hängt den Nutzer nur an (für `GET /api/me`).
-- `authGate` / `requireAuth` — älteres Tor: ohne `AUTH_REQUIRED=true` anonym durchlassen, mit `=true` Token erzwingen (401 ohne/ungültig, 503 wenn Supabase nicht konfiguriert).
+- **API-Key (`bj_` + 64 Hex-Zeichen):** Langlebig, für MCP-Clients. In der DB liegt nur der SHA-256-Hash (`api_keys`). Erzeugen per `/mcp`-UI oder CLI (`node src/agent/scripts/create-api-key.js --user "jakob" --name "Claude"`).
+- **Supabase-JWT:** Browser-Login (Google / Apple / E-Mail+Passwort), verifiziert per `auth.getUser(token)`.
 
 Jede Zeile trägt `owner_id`; Slugs sind nur **innerhalb** eines Owners eindeutig.
 
-## 6. Crawl-Pipeline (`src/web/backend/crawl-providers.js`)
+## 6. Serverseitiger KI-Property-Abgleich (`spec-alignment.js`, `crawl-queue.js`, `crawl-providers.js`)
 
-Zwei entkoppelte Stufen. Neue Provider werden hier registriert — Route und Frontend-Dropdowns übernehmen sie automatisch über `stage`.
+Web-Crawling im Backend gibt es nicht mehr — `crawl-providers.js` stellt ausschließlich die schlanke LLM-Provider-Schicht (`runLlmJson`) für Hintergrundaufgaben bereit:
 
-### 6.1 Stufe 1 — Inhalt parsen (Fetcher: `fetch(url) → {title, text}`)
-
-| Name | Bedeutung | Config |
+| Provider | Bedeutung | Config |
 |---|---|---|
-| `direct` | **Default**, eingebaut: Backend lädt die Seite selbst, `htmlToText()` extrahiert Titel + Fließtext | — |
-| `headless` | Puppeteer rendert JavaScript (JS-Seiten, Bot-Schutz) | `puppeteer` installiert, `CRAWL_HEADLESS_TIMEOUT_MS` |
-| `local-cmd` | externes Parse-Tool auf dieser Maschine; `{url}`/`{journey}` als Platzhalter + Env `CRAWL_URL`/`CRAWL_JOURNEY`, stdout `{title?, text}` | `CRAWL_FETCH_CMD` |
+| `agy` | **Default** (Priorität 1), wenn das Binary im PATH steht: lokale CLI (`--mode plan`, `--json-schema`) | `CRAWL_AGY_BIN`, `-MODEL`, `-EFFORT`, `-TIMEOUT_MS` |
+| `remote-ai` | `POST` JSON-Payload an einen HTTP-Endpunkt (Key optional als Bearer) | `CRAWL_REMOTE_URL`, `CRAWL_REMOTE_KEY` |
+| `local-cmd` | Lokales Kommando, JSON über stdin, Ergebnis-JSON über stdout | `CRAWL_EXTRACT_CMD` |
 
-**Auto-Fallback:** Scheitert `direct` oder liefert weniger als `CRAWL_DIRECT_MIN_CHARS` (Default 1000) sichtbaren Text, lädt die Pipeline automatisch `headless` nach. **Explizit gewählte** Fetcher fallen nicht zurück — deren Fehler gehen direkt an den Aufrufer.
+Ablauf in `POST /api/data`:
+1. `store.getItemsSnapshot()` + `computeItemsHash()` prüfen, ob sich `items` geändert haben (`itemsChanged`).
+2. Bei `itemsChanged && nextItems.length >= 2 && hasAnyKeyedSpecs(nextItems)`:
+   - **Ohne konfigurierten LLM-Provider:** Stiller deterministischer Fallback (`computeDeterministicSpecComparison` ohne Key-Umbenennung und ohne Extra-SSE).
+   - **Mit LLM-Provider:** `specQueue.scheduleDebounced` (`CRAWL_QUEUE_CONCURRENCY`, `SPEC_ALIGNMENT_DEBOUNCE_MS`, Latest-wins pro `owner/slug`) ruft asynchron `alignJourneySpecs()` mit `src/agent/prompts/spec_alignment_prompt.md` + `spec-alignment-schema.json` auf.
+3. Vor Commit prüft `store.applySpecAlignment()` den `expectedItemsHash` (schützt vor Überschreiben neuerer Nutzer-Edits) und schreibt nur `items.specs` + `journeys.spec_comparison`, ohne `POST /api/data` erneut zu triggern. Bei Erfolg feuert `broadcastJourneyUpdate(owner, journey, { reason: 'property-sync' })`; bei LLM-Fehlern greift ein stiller Fallback.
 
-### 6.2 Stufe 2 — Inhalt mit LLM auswerten (Extraktor: `extract(content) → rawProduct`)
+## 7. MCP (`packages/mcp/`, Wrapper `src/mcp/`)
 
-| Name | Bedeutung | Config |
-|---|---|---|
-| `agy` | **Default**, wenn das Binary im PATH steht: lokale CLI im Print-Mode (`--mode plan`, keine Tools, Antwort per `--json-schema` erzwungen) | `CRAWL_AGY_BIN/-MODEL/-EFFORT/-TIMEOUT_MS` |
-| `remote-ai` | `POST {url, journey, title, text}` an einen HTTP-Endpunkt, Key optional als Bearer | `CRAWL_REMOTE_URL`, `CRAWL_REMOTE_KEY` |
-| `local-cmd` | lokales Skript, Inhalt als JSON über stdin, stdout = Produkt-JSON | `CRAWL_EXTRACT_CMD` |
-| `n8n` | **Legacy, kombiniert**: `POST {url, journey}` an den Webhook, crawlt selbst → Stufe 1 entfällt (`fetcher: null`). Fallback-Default ohne `agy`-Binary | `N8N_WEBHOOK_URL` |
+Abhängigkeitsfreier stdio-MCP-Server (`npm run mcp`), spricht das Backend über `MCP_BASE_URL` (Default `http://localhost:3000` bzw. `PORT`) mit `MCP_AUTH_TOKEN` (API-Key). `packages/mcp/src/tools.js` (`SERVER_INFO.name = 'journey-path'`) ist Single Source of Truth für Namen, Beschreibungen und `inputSchema` — auch für `GET /api/mcp-status`.
 
-Auflösung: Request-Feld `provider` > `CRAWL_EXTRACT_PROVIDER` / `CRAWL_PROVIDER` > `agy` falls verfügbar, sonst `n8n`. Analog `fetcher` > `CRAWL_FETCH_PROVIDER` > `direct`. Der geparste Inhalt geht auf `CRAWL_MAX_CHARS` (Default 20000) gekappt an die LLM. `toJourneyItem()` mappt das Rohprodukt aufs Item-Format (`starsFromRating`, `specsToString`).
+Bereitgestellte Tools (19): `journey.help`, `journey.list`, `journey.create`, `journey.update_config`, `journey.delete`, `journey.get` (mit `status`/`search`/`sort`/`limit`/`offset`/`fields`), `journey.compare`, `journey.shortlist`, `journey.price_history`, `journey.set_criteria`, `journey.delete_criteria`, `journey.add_item` (mit `priceAmount`/`priceCurrency`/`priceQualifier`/`pros`/`cons`), `journey.delete_item`, `journey.update_meta`, `journey.add_log`, `journey.delete_log`, `journey.set_spec`, `journey.delete_spec`, `journey.set_feedback`.
 
-### 6.3 Journey-Benennung (`suggestJourneyCategory`)
+## 8. Vergleich, Preise, Entscheidung (Feature-Set 2026-11)
 
-`POST /api/suggest-journey` verallgemeinert ein Produkt zur Kategorie, nach der eine neue Journey heißt (Tesla Model 3 → `elektro-auto`). **Eine Quelle, ein Prompt:** `src/agent/prompts/journey_naming_prompt.md`, Antwortform erzwungen über `journey-naming-schema.json`. Naming-fähig sind `agy`, `remote-ai`, `local-cmd`. Ohne solchen Provider (und ohne explizite Provider-Wahl) gibt es einen **ehrlich markierten Rückfall**: die ersten drei Titelwörter, `provider: "fallback"`. Wird ein nicht naming-fähiger Provider explizit gewählt → 501.
+- **Preise strukturiert:** `items` hat `price_amount`/`price_currency`/`price_qualifier`/`price_updated_at` neben dem Anzeige-String `price` (Parser in `src/core/price-parse.js`, DE-Formate wie `1.189,95 €`, `ab 249,00 €`). Bei geaendertem Anzeigetext gewinnt der Text (schuetzt vor veralteten Round-Trip-Werten), bei unveraendertem Text eine explizite Zahl (MCP). Aenderungen landen in `price_history` (per Item-Name geschluesselt, damit Voll-Replace sie nicht per CASCADE loescht).
+- **Pro/Contra & Kriterien:** `items.pros`/`cons` (JSON-Arrays, max. 20 x 200 Zeichen), `journey_criteria` (`key`, `weight` 1..5). Scoring in `src/core/decision.js`: `12*rating + 2*(pros-cons) + pricePoints (max. 20) + criteriaPoints`, gedeckelt 0..100, mit `breakdown` und max. 3 `reasons`.
+- **Lesende Endpunkte (kein Lazy-Create, kein SSE):** `GET /api/data` mit Filter/Sortierung/Paginierung, `GET /api/compare` (Preisspanne, Scores, common/unique, `missing`), `GET /api/shortlist?n=` (Default ohne `Rejected`), `GET /api/criteria` + `POST`/`DELETE`, `GET /api/price-history?name=&limit=`.
+- **Fehlerformat neu:** `{error, code}` mit `INVALID_*`, `JOURNEY_NOT_FOUND`, `ITEM_NOT_FOUND`, `CRITERION_NOT_FOUND`.
 
-### 6.4 Fehlerfälle & manueller Content-Fallback
-
-| Code / Status | Bedeutung | Reaktion |
-|---|---|---|
-| 400 | Eingabefehler (ungültige URL, unbekannte Stufe, leerer Text) | Nutzer korrigiert die Eingabe — **kein** Platzhalter |
-| `CONTENT_BLOCKED` (502) | Extraktion lieferte nur einen Namen, kein Preis und keine Specs → wahrscheinlich Bot-Schutz | Frontend legt Platzhalter mit `needsContent` an |
-| `NO_EXTRACTOR` (501/500/400) | kein LLM-Provider konfiguriert bzw. `n8n` kann keinen eingefügten Text auswerten | MCP nutzt den Offline-Rückfall, Frontend meldet es |
-| 504 | Zeitüberschreitung (`CRAWL_TIMEOUT_MS` 60 s, agy-Timeout separat) | Platzhalter |
-
-Der manuelle Weg: Nutzer kopiert die Seite, `cleanPastedContent()` (`src/core/paste-clean.js`) wirft Head/Skripte/Styles/Kommentare raus und normalisiert Whitespace, `POST /api/parse-text` wertet den Rest per LLM aus. Danach wird `needs_content` gelöscht.
-
-## 7. MCP (`src/mcp/`)
-
-stdio-Server ohne Dependencies (`npm run mcp`), spricht das Backend über `MCP_BASE_URL` (Default `http://localhost:3000`) mit `MCP_AUTH_TOKEN` (API-Key). `tools.js` ist Single Source of Truth für Namen, Beschreibungen und `inputSchema` — auch für `GET /api/mcp-status`.
-
-| Tool | Wirkung |
-|---|---|
-| `journey.get` | Volldokument inkl. Config lesen, legt nichts an |
-| `journey.add_item` | Produkt anlegen/aktualisieren (Upsert nach Name, case-insensitiv) |
-| `journey.crawl_link` | Produktseite headless laden (Titel + Text), speichert nichts |
-| `journey.create_from_link` | **Nur `link` ist Pflicht.** Ohne `slug` benennt die LLM die Journey (`/api/suggest-journey`), das Erstprodukt kommt aus `/api/parse-text`. Explizit übergebene Felder überschreiben die Extraktion. Reihenfolge: erst crawlen, dann anlegen — schlägt der Crawl fehl, bleibt nichts zurück. Antwort führt `slugSource` und `ai: {naming, extraction}` mit, damit ein Offline-Rückfall erkennbar ist |
-
-## 8. Weitere Bausteine
+## 9. Weitere Bausteine & Tests
 
 - **`src/core/item-format.js`:** `starsFromRating(0–5)` → ⭐-String; `specsToString([{label,value}])` → `<br>`-String.
-- **`src/agent/scripts/`:** CLIs (`--journey bike --name …`, Extra-Flags werden Specs), Crawler, API-Key-Erzeugung — schreiben direkt in SQLite, ohne laufendes Backend.
-- **Tests:** `npm test` (132 Tests, alle grün) — `test/store.test.js`, `server.test.js`, `auth.test.js`, `item-format.test.js`, `mcp.test.js`, `sse.test.js`, `light-contrast.test.js`, `journeys-overview-logged-out.test.js`, `login-gate.test.js`, `crawl-providers.test.js`, `paste-clean.test.js` sowie `manual-content.test.js` (läuft mit `--experimental-strip-types`). LLM-Attrappe: `test/helpers/llm-stub.js`.
+- **`src/core/price-parse.js` / `decision.js`:** DE-Preisparser, deterministisches Scoring, Budget-Urteil, Filter-/Sortier-Helfer.
+- **`src/agent/scripts/`:** `create-api-key.js` sowie Legacy-Offline-SQLite-CLIs (`add-item.js`, `add-log.js`, `utils.js`).
+- **Tests (`npm test`):** `item-format.test.js`, `store.test.js`, `server.test.js`, `auth.test.js`, `light-contrast.test.js`, `mcp.test.js`, `sse.test.js`, `journeys-overview-logged-out.test.js`, `login-gate.test.js`, `crawl-providers.test.js`, `crawl-queue.test.js`, `spec-alignment.test.js`, `price-parse.test.js`, `compare.test.js`, `decision.test.js` sowie (mit `--experimental-strip-types`) `journey-switch.test.js`, `compare-cell-wrap.test.js`, `compare-spec-grouping.test.js`.
 
-#architektur #backend #sqlite #express #crawl
+#architektur #backend #sqlite #express #mcp

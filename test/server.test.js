@@ -117,7 +117,21 @@ test('journeys start with bike and data round-trips through SQLite', async (t) =
   assert.deepEqual(await save.json(), { success: true });
 
   const loaded = await (await getAuthed(base, '/api/data?journey=bike')).json();
-  assert.deepEqual(loaded, { ...doc, headers: ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link'] });
+  assert.deepEqual(loaded.headers, ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link']);
+  assert.deepEqual(loaded.status, doc.status);
+  assert.deepEqual(loaded.journey, doc.journey);
+  assert.deepEqual(loaded.specs, doc.specs);
+  assert.equal(loaded.generalNotes, doc.generalNotes);
+  assert.equal(loaded.items.length, 1);
+  const item = loaded.items[0];
+  assert.equal(item.name, 'Cube Kathmandu Pro');
+  assert.equal(item.price, '1499€');
+  assert.equal(item.priceAmount, 1499);
+  assert.equal(item.priceCurrency, 'EUR');
+  assert.ok(typeof item.priceUpdatedAt === 'string' && item.priceUpdatedAt.length > 0);
+  assert.deepEqual(item.pros, []);
+  assert.deepEqual(item.cons, []);
+  assert.deepEqual(loaded.criteria, []);
 });
 
 test('journeys are isolated with heterogeneous specs', async (t) => {
@@ -360,7 +374,7 @@ test('GET /api/mcp-status includes packageName and server info', async (t) => {
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.packageName, '@journey-path/mcp');
-  assert.equal(body.server.name, 'bike-buying-journey');
+  assert.equal(body.server.name, 'journey-path');
   assert.ok(Array.isArray(body.tools));
 });
 

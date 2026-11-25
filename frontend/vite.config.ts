@@ -13,10 +13,12 @@ export default defineConfig({
   },
   envDir: path.resolve(__dirname, '..'),
   server: {
-    port: 3300,
+    // Browser-Einstieg ist immer http://localhost:1337 (dev wie prod);
+    // das Backend läuft im Dev per PORT=3000 daneben (siehe package.json).
+    port: 1337,
     proxy: {
       '/api': {
-        target: 'http://localhost:1337',
+        target: 'http://localhost:3000',
         changeOrigin: true,
       },
     },

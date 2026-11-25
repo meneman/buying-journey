@@ -19,7 +19,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useJourneyData } from '@/lib/journey-data-context'
 import { useJourney } from '@/lib/router'
-import type { JourneySpec } from '@/lib/types'
+import { deleteCriteria, fetchCriteria, setCriteria } from '@/lib/api'
+import type { JourneyCriteria, JourneySpec } from '@/lib/types'
 
 export function Specs() {
   const { data, mutate } = useJourneyData()
@@ -28,6 +29,13 @@ export function Specs() {
   const [dialog, setDialog] = useState<{ open: boolean; index: number | null }>({ open: false, index: null })
   const [label, setLabel] = useState('')
   const [value, setValue] = useState('')
+  const [criteria, setCriteriaList] = useState<JourneyCriteria[]>([])
+  const [critKey, setCritKey] = useState('')
+  const [critWeight, setCritWeight] = useState('3')
+
+  useEffect(() => {
+    fetchCriteria(journey).then((r) => setCriteriaList(r.criteria || [])).catch(() => {})
+  }, [journey])
 
   useEffect(() => {
     if (!dialog.open) return
@@ -116,6 +124,63 @@ export function Specs() {
           ))}
         </div>
       )}
+
+      <div className="mt-8">
+        <div className="mb-3 flex items-center gap-2">
+          <h2 className="font-heading text-lg font-semibold">Kriterien-Gewichte</h2>
+          <Badge variant="secondary">{criteria.length}</Badge>
+        </div>
+        <form
+          className="mb-3 flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            const w = Number(critWeight)
+            if (!critKey.trim() || !Number.isInteger(w) || w < 1 || w > 5) return
+            setCriteria(journey, critKey.trim(), w)
+              .then(() => fetchCriteria(journey))
+              .then((r) => {
+                setCriteriaList(r.criteria || [])
+                setCritKey('')
+                setCritWeight('3')
+              })
+              .catch(() => {})
+          }}
+        >
+          <Input placeholder="Key, z.B. Gewicht oder price" value={critKey} onChange={(e) => setCritKey(e.target.value)} />
+          <Input
+            type="number"
+            min={1}
+            max={5}
+            className="w-20"
+            value={critWeight}
+            onChange={(e) => setCritWeight(e.target.value)}
+          />
+          <Button type="submit" size="sm">Speichern</Button>
+        </form>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {criteria.map((c) => (
+            <div key={c.key} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
+              <div>
+                <h3 className="font-heading font-medium">{c.key}</h3>
+                <span className="font-mono text-sm text-celeste">Gewicht {c.weight}</span>
+              </div>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                title="Löschen"
+                onClick={() => {
+                  deleteCriteria(journey, c.key)
+                    .then(() => fetchCriteria(journey))
+                    .then((r) => setCriteriaList(r.criteria || []))
+                    .catch(() => {})
+                }}
+              >
+                <FontAwesomeIcon icon={faTrashCan} className="size-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      </div>
 
       <Dialog open={dialog.open} onOpenChange={(open) => setDialog((d) => ({ ...d, open }))}>
         <DialogContent>

@@ -122,7 +122,7 @@ function startMcp(t, baseUrl, token) {
 
 async function handshake(client) {
   const init = await client.rpc('initialize', {});
-  assert.equal(init.result.serverInfo.name, 'bike-buying-journey');
+  assert.equal(init.result.serverInfo.name, 'journey-path');
   client.notify('notifications/initialized', {});
 }
 
@@ -326,7 +326,7 @@ test('GET /api/mcp-status liefert Server-Info und Tool-Liste (für die /mcp-Seit
   const res = await fetch(`${base}/api/mcp-status`);
   assert.equal(res.status, 200);
   const body = await res.json();
-  assert.deepEqual(body.server, { name: 'bike-buying-journey', version: '1.0.0' });
+  assert.deepEqual(body.server, { name: 'journey-path', version: '1.0.0' });
   assert.equal(body.protocolVersion, '2024-11-05');
   assert.deepEqual(
     body.tools.map((tool) => tool.name),
@@ -337,6 +337,11 @@ test('GET /api/mcp-status liefert Server-Info und Tool-Liste (für die /mcp-Seit
       'journey.update_config',
       'journey.delete',
       'journey.get',
+      'journey.compare',
+      'journey.shortlist',
+      'journey.price_history',
+      'journey.set_criteria',
+      'journey.delete_criteria',
       'journey.add_item',
       'journey.delete_item',
       'journey.update_meta',
@@ -455,7 +460,7 @@ test('Standalone-Paket packages/mcp/bin/journey-path-mcp.js startet und beantwor
   });
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) + '\n');
   const initRes = await initPromise;
-  assert.equal(initRes.result.serverInfo.name, 'bike-buying-journey');
+  assert.equal(initRes.result.serverInfo.name, 'journey-path');
   assert.equal(initRes.result.protocolVersion, '2024-11-05');
 });
 

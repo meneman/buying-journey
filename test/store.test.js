@@ -43,10 +43,17 @@ test('save/get round-trips a full journey document', async (t) => {
     listTitle: 'Rahmengrößen',
   };
   store.saveJourneyData('bike', 'anna', doc);
-  assert.deepEqual(store.getJourneyData('bike', 'anna'), {
-    ...doc,
-    headers: ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link'],
-  });
+  const loaded = store.getJourneyData('bike', 'anna');
+  assert.deepEqual(loaded.headers, ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link']);
+  assert.deepEqual(loaded.status, doc.status);
+  assert.deepEqual(loaded.journey, doc.journey);
+  assert.deepEqual(loaded.specs, doc.specs);
+  assert.equal(loaded.items.length, 1);
+  assert.equal(loaded.items[0].priceAmount, 1499);
+  assert.equal(loaded.items[0].priceCurrency, 'EUR');
+  assert.deepEqual(loaded.items[0].pros, []);
+  assert.deepEqual(loaded.items[0].cons, []);
+  assert.deepEqual(loaded.criteria, []);
 });
 
 test('heterogeneous journeys stay isolated and queryable via JSON1', async (t) => {

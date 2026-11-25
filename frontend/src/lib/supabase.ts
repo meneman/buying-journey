@@ -42,12 +42,12 @@ export function getOAuthRedirectUrl(): string {
   if (typeof window !== 'undefined') {
     // Falls lokal aufgerufen (localhost oder 127.0.0.1), immer explizit http://localhost:<port>/login nutzen
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      const port = window.location.port ? `:${window.location.port}` : ':3300'
+      const port = window.location.port ? `:${window.location.port}` : ':1337'
       return `http://localhost${port}/login`
     }
     return `${window.location.origin}/login`
   }
-  return 'http://localhost:3300/login'
+  return 'http://localhost:1337/login'
 }
 
 /** Access-Token der aktuellen Session für `Authorization: Bearer <token>`. */

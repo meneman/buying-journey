@@ -1,16 +1,15 @@
-# Manuelle Browser-Verifikation: Server-KI-Abgleich für Item-Properties (`specs`)
+# Manuelle Browser-Verifikation: Doku, Skill & Naming auf MCP-First angleichen
 
 **Datum:** 2026-11-24
 
-> Hinweis: Vor dem Testen den Dev-Stack selbst starten (`npm run dev` — Backend auf Port `3000`, Vite-Dev-Server auf Port `3300`), dann `http://localhost:3300` im Browser öffnen (`/api`-Calls werden per Proxy ans Backend geleitet).
+> Hinweis: Vor dem Testen den Dev-Stack selbst starten (`npm run dev` — Backend auf Port `3000`, Vite-Dev-Server auf Port `1337`), dann `http://localhost:1337` im Browser öffnen (`/api`-Calls werden per Proxy ans Backend geleitet).
 
-## Checkliste
+## Checkliste (`/mcp` & Naming-Bereinigung)
 
-- [ ] **Weniger als 2 Items (Edge Case):** Eine Journey mit nur 1 Item auf `/vergleich?journey=<slug>` öffnen. Prüfen, dass die Specs normal als Zeilen angezeigt werden und **keine** Bereichs-Überschriften („Gemeinsame Eigenschaften“ / „Weitere / Einzel-Eigenschaften“) erscheinen.
-- [ ] **Items ohne Specs (Edge Case):** Zwei Produkte ohne `specs` anlegen und `/vergleich?journey=<slug>` öffnen. Prüfen, dass keine leeren Spec-Bereiche gerendert werden.
-- [ ] **Aufteilung in Gemeinsame vs. Einzel-Eigenschaften (Deterministischer Fallback ohne LLM):** Zwei Produkte mit teilweise überlappenden Specs anlegen (z. B. Produkt 1: `Gewicht: 15 kg`, `Akku: 625 Wh`; Produkt 2: `gewicht: 14 kg`, `Farbe: Grün`). Prüfen, dass auf `/vergleich?journey=<slug>` zwei klar beschriftete Bereiche erscheinen: **Gemeinsame Eigenschaften** (`Gewicht` — case-insensitiv zusammengeführt) und **Weitere / Einzel-Eigenschaften** (`Akku`, `Farbe`).
-- [ ] **KI-Synonyme & SSE-Live-Sync (mit konfiguriertem LLM-Provider, z. B. `agy`, `remote-ai` oder `CRAWL_EXTRACT_CMD`):** Ein zweites Produkt mit synonymem Spec-Key (z. B. `Weight: 15.2 kg` vs. `Gesamtgewicht: 14.1 kg`) per Web-UI oder MCP `journey.add_item` hinzufügen, während `/vergleich?journey=<slug>` im Browser offen ist:
-  - [ ] Das Speichern antwortet sofort ohne Wartezeit auf das LLM.
-  - [ ] Nach Abschluss des Hintergrund-Jobs erscheint ein SSE-Toast (**„Eigenschaften abgeglichen“**) mit Button **„Neu laden“** (ohne laufende Edits still zu überschreiben).
-  - [ ] Nach Klick auf **„Neu laden“** werden die vereinheitlichten Spec-Keys unter **Gemeinsame Eigenschaften** einsortiert; Originalwerte und eventuelle Freitext-Specs bleiben unverändert.
-- [ ] **Stiller Fallback bei Fehler:** Ungültigen/fehlerhaften Provider setzen (z. B. `CRAWL_EXTRACT_PROVIDER=local-cmd` und `CRAWL_EXTRACT_CMD="exit 1"`). Beim Speichern von 2 Items darf im Browser keine Fehlermeldung erscheinen; die Vergleichstabelle bleibt mit der deterministischen Gruppierung nutzbar.
+- [ ] **Login-Gate für `/mcp`:** Ausgeloggt im Header auf den Button **MCP** klicken — die App leitet direkt auf `/login` weiter (kein ungeschützter Zugriff auf `/mcp`).
+- [ ] **Standard-Modus auf `/mcp` (`Lokal (Node · Empfohlen)`):** Eingeloggt `/mcp` öffnen. Prüfen, dass im Schritt **„KI-Client konfigurieren“** standardmäßig **„Lokal (Node · Empfohlen)“** aktiv ist und die Snippets für **Claude Desktop**, **Cursor IDE** und **Shell / CLI** auf `node` mit dem Pfad zu `src/mcp/server.js` zeigen (Umschalten auf `npx (Paket)` wechselt auf `npx -y @journey-path/mcp`).
+- [ ] **Muse-Servername ohne `bike`-Altlast:** Im Tab **„Muse“** prüfen, dass der Konfigurations-Key unter `mcpServers` jetzt **`"journey-path"`** heißt (nicht mehr `"bike-buying-journey"`).
+- [ ] **Server-Status & Tool-Explorer auf `/mcp`:** In Schritt 4 („Server-Status & Verfügbare Tools“) auf **„Status prüfen“** klicken:
+  - [ ] Status zeigt grün **`journey-path v1.0.0`** (Protokoll `2024-11-05`) an.
+  - [ ] Die Tool-Liste zeigt alle 14 aktuellen MCP-Tools (inkl. `journey.help`, `journey.list`, `journey.create`, `journey.delete_item` usw.) und **keine** entfernten Crawl-Tools (`journey.crawl_link` / `journey.create_from_link`).
+- [ ] **Keine In-App-Crawl-Relikte:** Auf Dashboard (`/?journey=bike`) und Vergleich (`/vergleich?journey=bike`) prüfen, dass ausschließlich die manuellen Formulare/Dialoge („Eintrag hinzufügen“ / „Neue Kaufreise“) sichtbar sind.

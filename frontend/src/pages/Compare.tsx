@@ -96,7 +96,31 @@ export function Compare() {
 
   const baseAttributes: Attribute[] = [
     { label: 'Name', icon: faCompass, render: (item) => <ExpandableText text={item.name} className="font-medium" /> },
-    { label: 'Preis', icon: faEuroSign, render: (item) => <span className="font-mono text-celeste">{item.price || 'k.A.'}</span> },
+    {
+      label: 'Preis',
+      icon: faEuroSign,
+      render: (item) => (
+        <span className="font-mono text-celeste">
+          {item.price || 'k.A.'}
+          {item.priceQualifier ? <Badge variant="secondary" className="ml-2">{item.priceQualifier}</Badge> : null}
+        </span>
+      ),
+    },
+    {
+      label: 'Pro / Contra',
+      icon: faStar,
+      render: (item) => (
+        <div className="flex flex-col gap-1 text-sm">
+          {(item.pros || []).map((p, i) => (
+            <span key={`p-${i}`}>+ {p}</span>
+          ))}
+          {(item.cons || []).map((c, i) => (
+            <span key={`c-${i}`} className="text-muted-foreground">− {c}</span>
+          ))}
+          {(item.pros || []).length === 0 && (item.cons || []).length === 0 ? <span>—</span> : null}
+        </div>
+      ),
+    },
     {
       label: 'Bewertung & Status',
       icon: faStar,

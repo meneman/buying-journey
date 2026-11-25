@@ -63,7 +63,7 @@ export function Mcp() {
 
   // UI state
   const [clientTab, setClientTab] = useState<ClientTab>('claude')
-  const [installMode, setInstallMode] = useState<'npx' | 'local'>('npx')
+  const [installMode, setInstallMode] = useState<'npx' | 'local'>('local')
   const [snippetCopied, setSnippetCopied] = useState(false)
   const [keyCopied, setKeyCopied] = useState(false)
   const [promptCopiedIndex, setPromptCopiedIndex] = useState<number | null>(null)
@@ -215,7 +215,7 @@ export function Mcp() {
     const museJson = JSON.stringify(
       {
         mcpServers: {
-          'bike-buying-journey': {
+          'journey-path': {
             type: 'stdio',
             command,
             args,
@@ -232,12 +232,12 @@ export function Mcp() {
     )
 
     const envBash = isNpx
-      ? `# In Shell oder .env für MCP-Start via npx (empfohlen):
+      ? `# In Shell oder .env für MCP-Start via npx (sobald @journey-path/mcp installiert/veröffentlicht ist):
 export MCP_BASE_URL="${baseUrl}"
 export MCP_AUTH_TOKEN="${activeTokenForSnippet}"
 
 npx -y ${packageName}`
-      : `# In Shell oder .env für manuellen Stdio-Start mit Node:
+      : `# In Shell oder .env für lokalen Stdio-Start mit Node (empfohlen):
 export MCP_BASE_URL="${baseUrl}"
 export MCP_AUTH_TOKEN="${activeTokenForSnippet}"
 
@@ -456,17 +456,6 @@ node "${serverFile}"`
             <div className="flex items-center gap-1 rounded-md border border-border bg-card p-0.5 text-xs">
               <button
                 type="button"
-                onClick={() => setInstallMode('npx')}
-                className={`rounded px-2.5 py-1 font-medium transition-colors ${
-                  installMode === 'npx'
-                    ? 'bg-secondary text-secondary-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                npx (Empfohlen)
-              </button>
-              <button
-                type="button"
                 onClick={() => setInstallMode('local')}
                 className={`rounded px-2.5 py-1 font-medium transition-colors ${
                   installMode === 'local'
@@ -474,7 +463,18 @@ node "${serverFile}"`
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
-                Lokal (Node)
+                Lokal (Node · Empfohlen)
+              </button>
+              <button
+                type="button"
+                onClick={() => setInstallMode('npx')}
+                className={`rounded px-2.5 py-1 font-medium transition-colors ${
+                  installMode === 'npx'
+                    ? 'bg-secondary text-secondary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                npx (Paket)
               </button>
             </div>
           </div>

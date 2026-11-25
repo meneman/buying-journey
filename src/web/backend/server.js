@@ -10,6 +10,16 @@ const {
   hasAnyKeyedSpecs,
   findUsableLlmProvider,
 } = require('./spec-alignment.js');
+const { parsePrice, parseRatingStars } = require('../../core/price-parse.js');
+const {
+  parseSpecsParts,
+  findSpecValue,
+  computePricePoints,
+  computeScoreForItem,
+  buildReasons,
+  budgetAllows,
+} = require('../../core/decision.js');
+const { ITEM_STATUSES } = require('../../mcp/tools.js');
 
 // Load environment variables
 dotenv.config();
@@ -291,12 +301,461 @@ app.put('/api/journey-config', needUser, (req, res) => {
   }
 });
 
+const VALID_SORTS = ['position', 'price', 'rating', 'name'];
+const VALID_FIELDS = ['items', 'status', 'specs', 'journey', 'generalNotes', 'feedback', 'config', 'headers', 'sectionTitle', 'listTitle', 'specComparison', 'criteria', 'pagination'];
+
+function parseStatusFilter(raw) {
+  if (raw === undefined) return null;
+  const list = Array.isArray(raw) ? raw : String(raw).split(',');
+  const out = list.map((s) => String(s).trim()).filter(Boolean);
+  for (const s of out) {
+    if (!ITEM_STATUSES.includes(s)) {
+      const err = new Error(`Unbekannter Status "${s}". Erlaubt: ${ITEM_STATUSES.join(', ')}.`);
+      err.code = 'INVALID_STATUS';
+      throw err;
+    }
+  }
+  return out;
+}
+
+function parseSortParams(query) {
+  const sort = query.sort !== undefined ? String(query.sort) : 'position';
+  if (!VALID_SORTS.includes(sort)) {
+    const err = new Error(`Unbekannte Sortierung "${sort}". Erlaubt: ${VALID_SORTS.join(', ')}.`);
+    err.code = 'INVALID_SORT';
+    throw err;
+  }
+  const dir = query.dir !== undefined ? String(query.dir).toLowerCase() : 'asc';
+  if (dir !== 'asc' && dir !== 'desc') {
+    const err = new Error('Parameter "dir" muss "asc" oder "desc" sein.');
+    err.code = 'INVALID_SORT';
+    throw err;
+  }
+  return { sort, dir };
+}
+
+function sortItems(items, sort, dir) {
+  const mult = dir === 'desc' ? -1 : 1;
+  const withIndex = items.map((item, idx) => ({ item, idx }));
+  withIndex.sort((a, b) => {
+    let cmp = 0;
+    if (sort === 'price') {
+      const av = typeof a.item.priceAmount === 'number' ? a.item.priceAmount : null;
+      const bv = typeof b.item.priceAmount === 'number' ? b.item.priceAmount : null;
+      if (av === null && bv === null) cmp = a.idx - b.idx;
+      else if (av === null) cmp = 1;
+      else if (bv === null) cmp = -1;
+      else cmp = av - bv;
+    } else if (sort === 'rating') {
+      cmp = parseRatingStars(a.item.rating) - parseRatingStars(b.item.rating);
+    } else if (sort === 'name') {
+      cmp = String(a.item.name || '').toLowerCase().localeCompare(String(b.item.name || '').toLowerCase());
+    } else {
+      cmp = a.idx - b.idx;
+    }
+    if (cmp !== 0) return cmp * mult;
+    return (a.idx - b.idx) * 1;
+  });
+  return withIndex.map((x) => x.item);
+}
+
+function applyItemFilters(items, { status, search, sort, dir }) {
+  let out = Array.isArray(items) ? [...items] : [];
+  if (status && status.length > 0) {
+    out = out.filter((i) => status.includes(i.status || 'Thinking'));
+  }
+  if (search) {
+    const q = String(search).toLowerCase();
+    out = out.filter((i) => {
+      const hay = [i.name, i.notes, i.price, i.link, i.specs].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }
+  if (sort && sort !== 'position') out = sortItems(out, sort, dir);
+  else if (dir === 'desc') out = [...out].reverse();
+  return out;
+}
+
+function buildComparePayload(doc, owner, journey, opts = {}) {
+  const criteria = Array.isArray(doc.criteria) ? doc.criteria : [];
+  const items = (Array.isArray(doc.items) ? doc.items : []).map((i) => ({
+    ...i,
+    pros: Array.isArray(i.pros) ? i.pros : [],
+    cons: Array.isArray(i.cons) ? i.cons : [],
+  }));
+  const pricePoints = computePricePoints(items);
+  const amounts = items.map((i) => i.priceAmount).filter((a) => typeof a === 'number');
+  const priceRange = amounts.length > 0
+    ? { min: Math.min(...amounts), max: Math.max(...amounts), currency: (items.find((i) => typeof i.priceAmount === 'number') || {}).priceCurrency || '' }
+    : null;
+  const minPrice = amounts.length > 0 ? Math.min(...amounts) : null;
+  const withScore = items.map((item) => {
+    const scoreInfo = computeScoreForItem(item, { pricePoints, criteria });
+    const reasons = buildReasons(item, scoreInfo, { minPrice, criteria });
+    const overBudget = budgetAllows(doc.status && doc.status.budget, item.priceAmount, item.priceCurrency, doc.configCurrency || '');
+    return { item, score: scoreInfo.score, breakdown: scoreInfo.breakdown, reasons, overBudget };
+  });
+  // Gruppierung: specComparison bevorzugen, sonst deterministisch.
+  const keyOrder = [];
+  const displayByLower = new Map();
+  const filledByLower = new Map();
+  items.forEach((item, index) => {
+    for (const part of parseSpecsParts(item.specs)) {
+      if (!part.k) continue;
+      const lower = part.k.toLowerCase();
+      if (!displayByLower.has(lower)) {
+        displayByLower.set(lower, part.k);
+        filledByLower.set(lower, new Set());
+        keyOrder.push(lower);
+      }
+      if (String(part.v || '').trim() !== '') filledByLower.get(lower).add(index);
+    }
+  });
+  const total = items.length;
+  const assigned = new Set();
+  const commonKeys = [];
+  const uniqueKeys = [];
+  const comp = doc.specComparison;
+  if (comp && Array.isArray(comp.commonKeys)) {
+    for (const raw of comp.commonKeys) {
+      const lower = String(raw).toLowerCase();
+      if (displayByLower.has(lower) && !assigned.has(lower)) {
+        commonKeys.push(displayByLower.get(lower));
+        assigned.add(lower);
+      }
+    }
+  }
+  if (comp && Array.isArray(comp.uniqueKeys)) {
+    for (const raw of comp.uniqueKeys) {
+      const lower = String(raw).toLowerCase();
+      if (displayByLower.has(lower) && !assigned.has(lower)) {
+        uniqueKeys.push(displayByLower.get(lower));
+        assigned.add(lower);
+      }
+    }
+  }
+  for (const lower of keyOrder) {
+    if (assigned.has(lower)) continue;
+    if (total > 0 && filledByLower.get(lower).size === total) commonKeys.push(displayByLower.get(lower));
+    else uniqueKeys.push(displayByLower.get(lower));
+    assigned.add(lower);
+  }
+  const valueByKey = (key) => {
+    const values = {};
+    for (const s of withScore) {
+      const v = findSpecValue(s.item, key);
+      values[s.item.name] = v || '—';
+    }
+    return values;
+  };
+  const common = (total >= 2 ? commonKeys : keyOrder.map((l) => displayByLower.get(l))).map((key) => ({ key, values: valueByKey(key) }));
+  const unique = total >= 2 ? uniqueKeys.map((key) => ({ key, values: valueByKey(key) })) : [];
+  const missing = items
+    .map((item) => {
+      const missingKeys = [...commonKeys, ...uniqueKeys].filter((k) => !String(findSpecValue(item, k) || '').trim());
+      return missingKeys.length > 0 ? { item: item.name, missingKeys } : null;
+    })
+    .filter(Boolean);
+  return {
+    slug: journey,
+    totalItems: items.length,
+    returnedItems: items.length,
+    sort: { by: opts.sort || 'position', dir: opts.dir || 'asc' },
+    priceRange,
+    items: withScore.map((s) => ({
+      name: s.item.name,
+      price: s.item.price,
+      priceAmount: s.item.priceAmount,
+      priceCurrency: s.item.priceCurrency,
+      priceQualifier: s.item.priceQualifier,
+      rating: parseRatingStars(s.item.rating),
+      status: s.item.status,
+      pros: s.item.pros,
+      cons: s.item.cons,
+      score: s.score,
+      breakdown: s.breakdown,
+      reasons: s.reasons,
+      overBudget: s.overBudget,
+    })),
+    common,
+    unique,
+    missing,
+    ...(doc.specComparison ? { specComparison: doc.specComparison } : {}),
+  };
+}
+
 app.get('/api/data', needUser, (req, res) => {
   const journey = getJourney(req);
   try {
-    res.json(store.getJourneyData(journey, req.user.id));
+    const q = req.query || {};
+    const hasFilter = q.status !== undefined || q.search !== undefined || q.sort !== undefined
+      || q.dir !== undefined || q.limit !== undefined || q.offset !== undefined
+      || q.fields !== undefined || q.includeSpecComparison !== undefined || q.includeLogs !== undefined
+      || q.includeSpecs !== undefined || q.includeFeedback !== undefined || q.includeConfig !== undefined;
+    const doc = store.getJourneyData(journey, req.user.id);
+    if (!hasFilter) {
+      res.json(doc);
+      return;
+    }
+    const status = parseStatusFilter(q.status);
+    const search = q.search !== undefined ? String(q.search) : '';
+    const { sort, dir } = parseSortParams(q);
+    let limit = null;
+    let offset = 0;
+    if (q.limit !== undefined) {
+      limit = Number(q.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+        const err = new Error('Parameter "limit" muss eine ganze Zahl 1..200 sein.');
+        err.code = 'INVALID_LIMIT';
+        throw err;
+      }
+    }
+    if (q.offset !== undefined) {
+      offset = Number(q.offset);
+      if (!Number.isInteger(offset) || offset < 0) {
+        const err = new Error('Parameter "offset" muss eine ganze Zahl >= 0 sein.');
+        err.code = 'INVALID_OFFSET';
+        throw err;
+      }
+    }
+    let fields = null;
+    if (q.fields !== undefined) {
+      fields = String(q.fields).split(',').map((s) => s.trim()).filter(Boolean);
+      for (const f of fields) {
+        if (!VALID_FIELDS.includes(f)) {
+          const err = new Error(`Unbekanntes Feld "${f}". Erlaubt: ${VALID_FIELDS.join(', ')}.`);
+          err.code = 'INVALID_FIELDS';
+          throw err;
+        }
+      }
+    }
+    const filtered = applyItemFilters(doc.items, { status, search, sort, dir });
+    const total = filtered.length;
+    const paged = limit !== null ? filtered.slice(offset, offset + limit) : filtered.slice(offset);
+    const out = { slug: journey, pagination: { total, returned: paged.length, limit: limit ?? total, offset } };
+    const want = (name, flag) => {
+      if (fields) return fields.includes(name);
+      if (flag !== undefined) {
+        const v = String(flag).toLowerCase();
+        return v === '1' || v === 'true' || v === 'yes';
+      }
+      // Defaults ohne fields: alles ausser feedback/config wie bisher.
+      return !['feedback', 'config'].includes(name);
+    };
+    if (!fields || fields.includes('items')) out.items = paged;
+    if (want('status')) out.status = doc.status;
+    if (want('journey', q.includeLogs)) out.journey = doc.journey;
+    if (want('specs', q.includeSpecs)) out.specs = doc.specs;
+    if (want('generalNotes')) out.generalNotes = doc.generalNotes;
+    if (want('feedback', q.includeFeedback)) {
+      out.feedback = store.getFeedback(journey, req.user.id);
+    }
+    if (want('config', q.includeConfig)) out.config = store.getJourneyConfig(journey, req.user.id);
+    if (want('headers')) out.headers = doc.headers;
+    if (want('sectionTitle')) out.sectionTitle = doc.sectionTitle;
+    if (want('listTitle')) out.listTitle = doc.listTitle;
+    if (want('specComparison', q.includeSpecComparison)) {
+      if (doc.specComparison) out.specComparison = doc.specComparison;
+    }
+    if (!fields || fields.includes('criteria')) out.criteria = doc.criteria || [];
+    res.json(out);
   } catch (error) {
+    if (error && error.code && String(error.code).startsWith('INVALID')) {
+      return res.status(400).json({ error: error.message, code: error.code });
+    }
+    if (error && (error.code === 'INVALID_LIMIT' || error.code === 'INVALID_OFFSET')) {
+      return res.status(400).json({ error: error.message, code: error.code });
+    }
     console.error('API GET Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+function requireJourneyParam(req) {
+  const raw = req.query ? req.query.journey : undefined;
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof first !== 'string' || !first.trim()) {
+    const err = new Error('Query-Parameter "journey" ist erforderlich.');
+    err.code = 'INVALID_SLUG';
+    throw err;
+  }
+  const cleaned = String(first).trim().toLowerCase().replace(/[^a-z0-9.-]/g, '');
+  if (!cleaned) {
+    const err = new Error('Query-Parameter "journey" ergibt kein gueltiges Kuerzel.');
+    err.code = 'INVALID_SLUG';
+    throw err;
+  }
+  return cleaned;
+}
+
+function journeyExists(slug, owner) {
+  return store.listJourneys(owner).includes(slug);
+}
+
+// Vergleichs-Antwort: lesend, kein Lazy-Create, kein SSE, kein Abgleich-Trigger.
+app.get('/api/compare', needUser, (req, res) => {
+  try {
+    const slug = requireJourneyParam(req);
+    if (!journeyExists(slug, req.user.id)) {
+      return res.status(404).json({ error: `Journey "${slug}" nicht gefunden.`, code: 'JOURNEY_NOT_FOUND' });
+    }
+    const q = req.query || {};
+    const status = parseStatusFilter(q.status);
+    const { sort, dir } = parseSortParams(q);
+    const doc = store.getJourneyData(slug, req.user.id);
+    const filteredItems = applyItemFilters(doc.items, { status, search: '', sort, dir });
+    const payload = buildComparePayload({ ...doc, items: filteredItems }, req.user.id, slug, { sort, dir });
+    res.json(payload);
+  } catch (error) {
+    if (error && error.code && (String(error.code).startsWith('INVALID') || error.code === 'JOURNEY_NOT_FOUND')) {
+      const statusCode = error.code === 'JOURNEY_NOT_FOUND' ? 404 : 400;
+      return res.status(statusCode).json({ error: error.message, code: error.code });
+    }
+    console.error('API GET Compare Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Shortlist: Top-N nach Score, lesend, schreibt keinen Status.
+app.get('/api/shortlist', needUser, (req, res) => {
+  try {
+    const slug = requireJourneyParam(req);
+    if (!journeyExists(slug, req.user.id)) {
+      return res.status(404).json({ error: `Journey "${slug}" nicht gefunden.`, code: 'JOURNEY_NOT_FOUND' });
+    }
+    const q = req.query || {};
+    let n = 3;
+    if (q.n !== undefined) {
+      n = Number(q.n);
+      if (!Number.isInteger(n) || n < 1 || n > 10) {
+        return res.status(400).json({ error: 'Parameter "n" muss eine ganze Zahl 1..10 sein.', code: 'INVALID_LIMIT' });
+      }
+    }
+    let status = null;
+    if (q.status !== undefined) {
+      status = parseStatusFilter(q.status);
+    } else {
+      status = ITEM_STATUSES.filter((s) => s !== 'Rejected');
+    }
+    const doc = store.getJourneyData(slug, req.user.id);
+    const filtered = applyItemFilters(doc.items, { status, search: '', sort: 'position', dir: 'asc' });
+    const payload = buildComparePayload({ ...doc, items: filtered }, req.user.id, slug, { sort: 'position', dir: 'asc' });
+    const ranked = [...payload.items].sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const ap = typeof a.priceAmount === 'number' ? a.priceAmount : Number.POSITIVE_INFINITY;
+      const bp = typeof b.priceAmount === 'number' ? b.priceAmount : Number.POSITIVE_INFINITY;
+      if (ap !== bp) return ap - bp;
+      if (b.rating !== a.rating) return b.rating - a.rating;
+      return String(a.name).localeCompare(String(b.name));
+    });
+    res.json({ slug, n, total: payload.items.length, items: ranked.slice(0, n), priceRange: payload.priceRange });
+  } catch (error) {
+    if (error && error.code && String(error.code).startsWith('INVALID')) {
+      return res.status(400).json({ error: error.message, code: error.code });
+    }
+    console.error('API GET Shortlist Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/criteria', needUser, (req, res) => {
+  try {
+    const slug = requireJourneyParam(req);
+    if (!journeyExists(slug, req.user.id)) {
+      return res.status(404).json({ error: `Journey "${slug}" nicht gefunden.`, code: 'JOURNEY_NOT_FOUND' });
+    }
+    res.json({ slug, criteria: store.getCriteria(slug, req.user.id) });
+  } catch (error) {
+    if (error && error.code === 'INVALID_SLUG') {
+      return res.status(400).json({ error: error.message, code: error.code });
+    }
+    console.error('API GET Criteria Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/criteria', needUser, (req, res) => {
+  try {
+    const slug = requireJourneyParam(req);
+    if (!journeyExists(slug, req.user.id)) {
+      return res.status(404).json({ error: `Journey "${slug}" nicht gefunden.`, code: 'JOURNEY_NOT_FOUND' });
+    }
+    const body = req.body || {};
+    if (typeof body.key !== 'string' || !body.key.trim()) {
+      return res.status(400).json({ error: 'Feld "key" (String) ist erforderlich.', code: 'INVALID_CRITERIA' });
+    }
+    try {
+      const result = store.setCriteria(slug, req.user.id, body.key, body.weight);
+      broadcastJourneyUpdate(req.user.id, slug);
+      res.json({ success: true, slug, ...result });
+    } catch (err) {
+      if (err && err.code === 'INVALID_CRITERIA') {
+        return res.status(400).json({ error: err.message, code: err.code });
+      }
+      throw err;
+    }
+  } catch (error) {
+    if (error && (error.code === 'INVALID_SLUG' || error.code === 'JOURNEY_NOT_FOUND')) {
+      const statusCode = error.code === 'JOURNEY_NOT_FOUND' ? 404 : 400;
+      return res.status(statusCode).json({ error: error.message, code: error.code });
+    }
+    console.error('API POST Criteria Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/criteria', needUser, (req, res) => {
+  try {
+    const slug = requireJourneyParam(req);
+    if (!journeyExists(slug, req.user.id)) {
+      return res.status(404).json({ error: `Journey "${slug}" nicht gefunden.`, code: 'JOURNEY_NOT_FOUND' });
+    }
+    const raw = req.query ? req.query.key : undefined;
+    const key = Array.isArray(raw) ? raw[0] : raw;
+    if (typeof key !== 'string' || !key.trim()) {
+      return res.status(400).json({ error: 'Query-Parameter "key" ist erforderlich.', code: 'INVALID_CRITERIA' });
+    }
+    const deleted = store.deleteCriteria(slug, req.user.id, key);
+    if (!deleted) {
+      return res.status(404).json({ error: `Kriterium "${key}" nicht gefunden.`, code: 'CRITERION_NOT_FOUND' });
+    }
+    broadcastJourneyUpdate(req.user.id, slug);
+    res.json({ success: true, slug, deleted: key });
+  } catch (error) {
+    if (error && (error.code === 'INVALID_SLUG' || error.code === 'INVALID_CRITERIA')) {
+      return res.status(400).json({ error: error.message, code: error.code });
+    }
+    console.error('API DELETE Criteria Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/price-history', needUser, (req, res) => {
+  try {
+    const slug = requireJourneyParam(req);
+    if (!journeyExists(slug, req.user.id)) {
+      return res.status(404).json({ error: `Journey "${slug}" nicht gefunden.`, code: 'JOURNEY_NOT_FOUND' });
+    }
+    const raw = req.query ? req.query.name : undefined;
+    const name = Array.isArray(raw) ? raw[0] : raw;
+    if (typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Query-Parameter "name" ist erforderlich.', code: 'INVALID_PARAMS' });
+    }
+    const limit = req.query && req.query.limit !== undefined ? Number(req.query.limit) : 20;
+    try {
+      const history = store.getPriceHistory(slug, req.user.id, name, limit);
+      res.json({ slug, name, history });
+    } catch (err) {
+      if (err && err.code === 'ITEM_NOT_FOUND') {
+        return res.status(404).json({ error: err.message, code: err.code });
+      }
+      throw err;
+    }
+  } catch (error) {
+    if (error && (error.code === 'INVALID_SLUG' || error.code === 'INVALID_PARAMS')) {
+      return res.status(400).json({ error: error.message, code: error.code });
+    }
+    console.error('API GET Price-History Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -360,8 +819,16 @@ app.post('/api/data', needUser, (req, res) => {
     const nextItems = Array.isArray(data.items) ? data.items : [];
     const nextHash = store.computeItemsHash(nextItems);
     const itemsChanged = before.hash !== nextHash;
+    const source = req.query && typeof req.query.source === 'string' && req.query.source === 'mcp' ? 'mcp' : 'ui';
 
-    store.saveJourneyData(journey, owner, data, { preserveSpecComparison: !itemsChanged });
+    try {
+      store.saveJourneyData(journey, owner, data, { preserveSpecComparison: !itemsChanged, source });
+    } catch (err) {
+      if (err && err.code === 'INVALID_PROS_CONS') {
+        return res.status(400).json({ error: err.message, code: err.code });
+      }
+      throw err;
+    }
 
     if (itemsChanged && nextItems.length >= 2 && hasAnyKeyedSpecs(nextItems)) {
       const provider = findUsableLlmProvider();

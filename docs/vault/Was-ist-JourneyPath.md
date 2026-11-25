@@ -1,9 +1,9 @@
 # Was ist JourneyPath? Sinn des Projekts 🧭
 
-> Ein Satz: **JourneyPath ist ein KI-gestützter Kauf-Wrapper** — eine lokale Hülle um den gesamten Kaufentscheidungsprozess, in die Mensch *und* KI-Assistent hineinarbeiten.
+> Ein Satz: **JourneyPath ist ein MCP-gestützter Kauf-Begleiter** — eine lokale Wissens- und Vergleichsplattform um den gesamten Kaufentscheidungsprozess, in die Mensch (Web-App) *und* KI-Assistent (MCP) gleichberechtigt hineinarbeiten.
 
 > [!info] Namen im Projekt
-> Die App heißt **JourneyPath** — in der UI (`frontend/index.html`, `AppHeader.tsx`, Crawler-User-Agent) und im Repo-`README.md`. Der Ursprungsname **VeloPath** stammt daher, dass alles als Fahrradkauf-Hilfe (Journey `bike`) startete; er taucht nur noch als historische Notiz auf. Die App ist inzwischen kategorie-unabhängig.
+> Die App heißt **JourneyPath** — in der UI (`frontend/index.html`, `AppHeader.tsx`), im MCP-Server (`journey-path`, Paket `@journey-path/mcp`) und im Repo-`README.md`. Der Ursprungsname **VeloPath** stammt daher, dass alles als Fahrradkauf-Hilfe (Journey `bike`) startete; er taucht nur noch historisch auf. Die App ist vollständig kategorie-unabhängig.
 
 ## Sinn
 
@@ -15,52 +15,46 @@ Kaufen ist Recherche + Vergleich + Bauchgefühl über Wochen. Tabs, PDFs, Händl
 
 Eine **Kaufreise (Journey) = eine Anschaffung**, adressiert über `?journey=<slug>`. Das Schema passt auf jede Kategorie (Fahrrad, Laptop, E-Auto, Schrank, Smartphone …) — die Vergleichsattribute liegen schemalos als JSON in `items.specs`, jede Journey hat also ihren eigenen Attributsatz.
 
-## Warum „KI-Software" / „Wrapper"?
+## Wie Mensch & KI zusammenarbeiten (MCP-First)
 
-Der Wrapper stellt Kaufdaten so bereit, dass **Browser und KI-Agent gleichberechtigt** damit arbeiten. Es gibt drei Wege hinein — alle landen in derselben lokalen SQLite-Datei:
+JourneyPath führt in der Web-App **keine eigenen Web-Crawls oder manuellen KI-Importe** mehr aus. Stattdessen greifen drei klare Rollen ineinander — alle Daten landen in derselben lokalen SQLite-Datei (`data/app.db`):
 
-### 1. URL einwerfen, LLM füllt den Eintrag
+### 1. KI-Client über MCP: Recherche & vollständiges CRUD
 
-Der Produkt-Import ist **URL-first**: Im „Eintrag hinzufügen"-Dialog, im Import-Feld und beim Anlegen einer Kaufreise reicht eine Produkt-URL — Name, Preis, Specs, Notizen kommen aus der LLM-Auswertung. Die manuelle Eingabe ist nur noch der aufklappbare Zweitweg.
+`npm run mcp` startet den abhängigkeitsfreien stdio-MCP-Server (`packages/mcp/src/server.js`, Wrapper `src/mcp/server.js`) mit 14 Tools (`journey.help`, `journey.list`, `journey.create`, `journey.update_config`, `journey.delete`, `journey.get`, `journey.add_item`, `journey.delete_item`, `journey.update_meta`, `journey.add_log`, `journey.delete_log`, `journey.set_spec`, `journey.delete_spec`, `journey.set_feedback`).
 
-Dahinter läuft eine **zweistufige Crawl-Pipeline** (`src/web/backend/crawl-providers.js`, Details in [[Architektur/Backend|Backend]] §6):
+Der KI-Assistent (Claude Desktop, Cursor, Muse) nutzt **seine eigenen Web-Tools** zur Recherche und schreibt strukturierte Ergebnisse direkt über MCP in die Journey. Jeder MCP-Zugriff authentifiziert sich über einen langlebigen API-Key (`bj_…`, `MCP_AUTH_TOKEN`) und arbeitet ausschließlich im Namensraum dieses Users.
 
-| Stufe | Aufgabe | Provider |
-|---|---|---|
-| 1 — Parse-Tool | Seite laden, Titel + Fließtext extrahieren | `direct` (eingebaut), `headless` (Puppeteer, rendert JS), `local-cmd` |
-| 2 — LLM-Auswertung | Inhalt → Produkt-JSON | `agy` (lokale CLI, Default), `remote-ai` (HTTP), `local-cmd`, `n8n` (Legacy-Webhook, crawlt selbst) |
+### 2. Web-App: Übersicht, Vergleich & manuelle Pflege
 
-Liefert `direct` zu wenig Text oder scheitert, wird automatisch `headless` nachgeladen (JS-Seiten, Bot-Schutz). Beide Stufen sind pro Request wählbar — im Frontend über zwei Dropdowns, die ihren Status aus `GET /api/crawl-providers` ziehen.
+Im Browser verwaltet der Mensch seine Kaufreisen über Dashboard (`/?journey=`), Vergleichsmatrix (`/vergleich`), journey-weite Eigenschaften (`/eigenschaften`), Feedback (`/feedback`), Einstellungen (`/einstellungen`) und den `/mcp`-Setup-Hub (API-Keys erstellen, fertige Snippets kopieren, Tool-Explorer prüfen).
 
-### 2. Blockierte Seite? Inhalt von Hand nachreichen
+Schreibt der MCP-Server Daten, erhält der geöffnete Browser sofort einen SSE-Toast („Neue Daten vom MCP-Server“ mit „Neu laden“-Button), ohne laufende Eingaben still zu überschreiben.
 
-Manche Shops lassen sich gar nicht crawlen. Dann entsteht kein Fehler, sondern ein **markierter Platzhalter** (`needsContent`): Der Eintrag landet mit Link und Hinweis in der Liste, Dashboard und Vergleich zeigen ihn ausgegraut mit „Inhalt einfügen". Dort kopiert man die Seite komplett hinein (Strg+A/Strg+V) — der Text wird nie angezeigt, nur die Zeichenzahl —, das Backend putzt ihn (`src/core/paste-clean.js`) und wertet ihn per LLM aus (`POST /api/parse-text`). Danach ist das Flag erledigt.
+### 3. Server: Storage, Auth, SSE & KI-Property-Abgleich
 
-### 3. MCP: der Agent bedient die App
+Wenn Produkte über `POST /api/data` eingetragen oder geändert werden (egal ob per MCP `journey.add_item` oder manuell im Browser) und mindestens 2 Items mit `specs` vorhanden sind, prüft der Server **asynchron im Hintergrund** per konfiguriertem LLM-Provider (`agy`, `remote-ai` oder `local-cmd`):
 
-`npm run mcp` startet den stdio-MCP-Server (`src/mcp/server.js`) mit `journey.get`, `journey.add_item`, `journey.crawl_link` und `journey.create_from_link`. Letzteres ist voll KI-gesteuert: **nur der Link ist Pflicht** — den Journey-Namen verallgemeinert ein LLM aus dem Produkt (Tesla Model 3 → Journey `elektro-auto`, Prompt: `src/agent/prompts/journey_naming_prompt.md`, Endpunkt `POST /api/suggest-journey`), das Erstprodukt kommt aus der Extraktion. Ohne KI-Provider gibt es statt eines Fehlers einen **ehrlich markierten Offline-Rückfall** (Titel + Link, `ai: "fallback"`).
+- **Synonyme vereinheitlichen:** z. B. `Weight` / `Gewicht` / `Gesamtgewicht` → einheitlicher kanonischer Key `Gewicht` (Werte, Reihenfolge und Freitext bleiben erhalten).
+- **Gemeinsame vs. Einzel-Eigenschaften ermitteln:** `/vergleich` teilt die dynamischen Spec-Zeilen automatisch in **Gemeinsame Eigenschaften** (bei allen Items befüllt) und **Weitere / Einzel-Eigenschaften** (nur bei einzelnen Items vorhanden).
+- **Stiller Fallback:** Fehlt ein LLM-Provider oder schlägt der Aufruf fehl, greift ohne Fehlermeldung eine deterministische, case-insensitive Gruppierung.
 
-Jeder MCP-Zugriff braucht einen langlebigen API-Key (`bj_…`, `MCP_AUTH_TOKEN`) und arbeitet ausschließlich im Namensraum dieses Users. Schreibt der Agent, sieht der offene Browser es per SSE-Toast + Reload.
-
-Daneben gibt es **Agent-Skill + CLI-Skripte** (`.agents/skills/buying-journey-manager/`, `src/agent/scripts/add-item.js`, `add-log.js`, `crawl-and-extract.js`), die direkt in SQLite schreiben — ohne laufendes Backend.
-
-Mensch recherchiert, KI trägt ein und fasst zusammen — **Single Source of Truth bleibt die lokale SQLite-Datei** (`data/app.db`).
+Daneben gibt es weiterhin Legacy-CLI-Skripte (`src/agent/scripts/create-api-key.js` für API-Keys sowie `add-item.js` / `add-log.js` als Offline-SQLite-Fallback ohne laufendes Backend).
 
 ## Was es nicht ist
 
 - Kein Shop, kein Preisvergleichsportal, keine Kaufabwicklung.
-- Kein Cloud-Dienst: Datenhoheit lokal (Backup = Datei kopieren). Login (API-Key oder Supabase) dient der **Trennung pro User** (`owner_id`) — gleiche Slugs verschiedener User sind unabhängige Journeys.
-- Keine Kaufempfehlung der KI — sie strukturiert und füllt, der Mensch bewertet und entscheidet.
-- Keine anonyme Nutzung: alle Datenrouten antworten ohne Identität mit 401. Ausgeloggt sichtbar sind nur `/login` und eine allgemeine Info-Startseite.
+- Kein Cloud-Datenspeicher: Datenhoheit lokal in SQLite (Backup = Datei kopieren). Login (API-Key oder Supabase-JWT) dient der **Trennung pro User** (`owner_id`).
+- Keine anonyme Nutzung: Alle Datenrouten antworten ohne Identität mit `401`. Ausgeloggt sichtbar sind nur `/login` und die Startseite `/` (ohne `?journey=`, allgemeine Infoseite).
 
 ## Typischer Ablauf
 
-1. **Kaufreise anlegen** — Produkt-URL in „Neue Kaufreise" einwerfen; Kürzel und Anzeigename leitet die App aus dem gecrawlten Produkt ab (manuelle Felder optional aufklappbar).
-2. **Kandidaten sammeln** — weitere Links einwerfen, oder der KI zurufen („trag das Rad für 1499 € ein"). Blockierte Seiten per „Inhalt einfügen" nachreichen.
-3. **Vergleichen** — Matrix über die Vereinigung aller `items.specs`-Schlüssel, Sterne vergeben, Favoriten markieren ([[Architektur/Frontend|Frontend]]).
-4. **Reise dokumentieren** — Probefahrten und Gespräche ins Tagebuch, Budget und Phase pflegen.
+1. **Kaufreise anlegen** — manuell in der Web-App („Neue Kaufreise“) oder per MCP (`journey.create`).
+2. **Kandidaten sammeln** — dem KI-Assistenten Produktwünsche oder Links nennen (er recherchiert und ruft `journey.add_item` auf) oder manuell im Produktdialog eintragen.
+3. **Automatischer Abgleich & Vergleich** — ab 2 Produkten vereinheitlicht der Server synonyme `specs` im Hintergrund; auf `/vergleich` erscheinen **Gemeinsame Eigenschaften** und **Weitere / Einzel-Eigenschaften** sauber getrennt.
+4. **Reise dokumentieren** — Probefahrten und Gespräche ins Tagebuch, Budget/Phase und Notizen pflegen (per Web-UI oder MCP).
 5. **Entscheiden** — Status bis `Bought` 🏆.
 
 Siehe auch: [[Architektur/Übersicht|Architektur-Übersicht]] · [[Architektur/Backend|Backend]] · [[Architektur/Frontend|Frontend]] · Haupt-`README.md` im Projekt-Root.
 
-#übersicht #sinn #ki
+#übersicht #sinn #mcp

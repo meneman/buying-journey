@@ -1,6 +1,6 @@
 # Vault – Übersicht 🗂️
 
-Dieser Ordner (`docs/vault`) ist ein **Obsidian Vault** – der Wissens- und Notizbereich zu [JourneyPath](../../README.md), dem KI-gestützten Kauf-Begleiter. (Ursprünglich hieß das Projekt *VeloPath* – siehe [[Was-ist-JourneyPath]].)
+Dieser Ordner (`docs/vault`) ist ein **Obsidian Vault** – der Wissens- und Notizbereich zu [JourneyPath](../../README.md), dem MCP-gestützten Kauf-Begleiter. (Ursprünglich hieß das Projekt *VeloPath* – siehe [[Was-ist-JourneyPath]].)
 
 ## Öffnen in Obsidian
 
@@ -12,7 +12,7 @@ Dieser Ordner (`docs/vault`) ist ein **Obsidian Vault** – der Wissens- und Not
 
 ## Worum geht es hier?
 
-Start: [[Was-ist-JourneyPath]] — Sinn des Projekts (KI-gestützter Kauf-Wrapper: URL rein, LLM füllt den Eintrag, MCP-Agent schreibt mit).
+Start: [[Was-ist-JourneyPath]] — Sinn des Projekts (**MCP-First**: KI-Client recherchiert und pflegt per MCP-Tools, Web-App dient Übersicht/Vergleich/Pflege, Server übernimmt Storage, Auth, SSE und KI-Property-Abgleich).
 
 - **Kaufreisen** dokumentieren: Kandidaten, Probefahrten, Händlergespräche, Entscheidungen
 - **Wissen sammeln:** Kaufkriterien, Specs, Links, Vor-/Nachteile
@@ -22,8 +22,8 @@ Die App-Daten selbst liegen lokal in SQLite (`data/app.db`, siehe [[Architektur/
 
 ## Struktur
 
-- [[Was-ist-JourneyPath]] – Sinn, KI-Wege in die App, Abgrenzung, typischer Ablauf
-- `Architektur/` – Systemdokumentation: [[Architektur/Übersicht|Übersicht]], [[Architektur/Backend|Backend]] (SQLite-Datenstruktur, API, Auth, Crawl-Pipeline, MCP), [[Architektur/Frontend|Frontend]] (Seiten, Komponenten, Datenfluss)
+- [[Was-ist-JourneyPath]] – Sinn, MCP-First-Workflow, Abgrenzung, typischer Ablauf
+- `Architektur/` – Systemdokumentation: [[Architektur/Übersicht|Übersicht]], [[Architektur/Backend|Backend]] (SQLite-Datenstruktur, REST-API, Auth, KI-Property-Abgleich, MCP), [[Architektur/Frontend|Frontend]] (Seiten, Komponenten, Login-Gate, Datenfluss)
 
 Vorgeschlagene Struktur beim Wachsen:
 

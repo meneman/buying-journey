@@ -12,6 +12,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
+const { parsePrice } = require('../core/price-parse.js');
+const { normalizeProsCons, parseProsConsJson } = require('../core/decision.js');
 
 // Load .env for CLI usage (server.js loads dotenv itself; harmless if repeated).
 try {
@@ -268,6 +270,90 @@ function openDatabase(dbPathExplicit) {
     db.exec("ALTER TABLE journeys ADD COLUMN spec_comparison TEXT NOT NULL DEFAULT ''");
   }
 
+  // Feature 3+5: strukturierte Preise, Pro/Contra, Kriterien, Preisverlauf.
+  // Alles NULL-/Default-faehig, damit alte DBs ohne Dump weiterlaufen.
+  const itemCols = new Set(db.prepare('PRAGMA table_info(items)').all().map((c) => c.name));
+  if (!itemCols.has('price_amount')) db.exec('ALTER TABLE items ADD COLUMN price_amount REAL');
+  if (!itemCols.has('price_currency')) db.exec("ALTER TABLE items ADD COLUMN price_currency TEXT NOT NULL DEFAULT ''");
+  if (!itemCols.has('price_qualifier')) db.exec("ALTER TABLE items ADD COLUMN price_qualifier TEXT NOT NULL DEFAULT ''");
+  if (!itemCols.has('price_updated_at')) db.exec("ALTER TABLE items ADD COLUMN price_updated_at TEXT NOT NULL DEFAULT ''");
+  if (!itemCols.has('pros')) db.exec("ALTER TABLE items ADD COLUMN pros TEXT NOT NULL DEFAULT '[]'");
+  if (!itemCols.has('cons')) db.exec("ALTER TABLE items ADD COLUMN cons TEXT NOT NULL DEFAULT '[]'");
+  if (!itemCols.has('created_at')) db.exec("ALTER TABLE items ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))");
+  if (!itemCols.has('updated_at')) db.exec("ALTER TABLE items ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))");
+  // Preisverlauf ist per Item-NAMEN (case-insensitiv) geschluesselt, nicht per
+  // Item-ID: `saveJourneyData` ersetzt Items per DELETE+INSERT (neue IDs), ein
+  // ID-Schluessel wuerde per ON DELETE CASCADE die Historie beim naechsten
+  // Speichern loeschen. Der Journey-FK bleibt (Journey loeschen = Historie weg).
+  const NEW_PRICE_HISTORY_DDL = `
+    CREATE TABLE price_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner_id TEXT NOT NULL,
+      journey_slug TEXT NOT NULL,
+      item_name TEXT NOT NULL DEFAULT '',
+      amount REAL,
+      currency TEXT NOT NULL DEFAULT '',
+      display TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (owner_id, journey_slug) REFERENCES journeys(owner_id, slug) ON DELETE CASCADE
+    )`;
+  const phTableExists = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'price_history'")
+    .get();
+  if (!phTableExists) {
+    db.exec(`${NEW_PRICE_HISTORY_DDL};
+      CREATE INDEX idx_price_history_item ON price_history (owner_id, journey_slug, item_name, id);`);
+  } else {
+    const phCols = new Set(db.prepare('PRAGMA table_info(price_history)').all().map((c) => c.name));
+    const phFks = db.prepare('PRAGMA foreign_key_list(price_history)').all();
+    const phRefsItems = phFks.some((fk) => fk.table === 'items');
+    if (!phCols.has('item_name') || phRefsItems) {
+      // Alte Form (item_id + CASCADE auf items) auf Namens-Schluessel umbauen,
+      // Daten soweit moeglich mitnehmen (Namen aus aktuellen Items aufloesen).
+      db.exec('ALTER TABLE price_history RENAME TO price_history_old');
+      db.exec(`${NEW_PRICE_HISTORY_DDL};
+        CREATE INDEX idx_price_history_item ON price_history (owner_id, journey_slug, item_name, id);`);
+      try {
+        if (phCols.has('item_name')) {
+          db.exec(`INSERT INTO price_history (owner_id, journey_slug, item_name, amount, currency, display, source, created_at)
+            SELECT owner_id, journey_slug, item_name, amount, currency, display, source, created_at FROM price_history_old`);
+        } else {
+          db.exec(`INSERT INTO price_history (owner_id, journey_slug, item_name, amount, currency, display, source, created_at)
+            SELECT ph.owner_id, ph.journey_slug, COALESCE((SELECT name FROM items WHERE items.id = ph.item_id), ''), ph.amount, ph.currency, ph.display, ph.source, ph.created_at
+            FROM price_history_old ph`);
+        }
+      } catch {
+        // Historien-Uebernahme ist best-effort.
+      }
+      db.exec('DROP TABLE price_history_old');
+    }
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS journey_criteria (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner_id TEXT NOT NULL,
+      journey_slug TEXT NOT NULL,
+      key TEXT NOT NULL DEFAULT '',
+      weight INTEGER NOT NULL DEFAULT 3,
+      position INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (owner_id, journey_slug, key),
+      FOREIGN KEY (owner_id, journey_slug) REFERENCES journeys(owner_id, slug) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_criteria_journey ON journey_criteria (owner_id, journey_slug, position);
+  `);
+  // Backfill: bestehende Freitext-Preise einmalig normalisieren (nur wo leer).
+  try {
+    const rows = db.prepare('SELECT id, price FROM items WHERE price_amount IS NULL').all();
+    const upd = db.prepare('UPDATE items SET price_amount = ?, price_currency = ?, price_qualifier = ? WHERE id = ?');
+    for (const r of rows) {
+      const parsed = parsePrice(r.price, '');
+      if (parsed.amount !== null) upd.run(parsed.amount, parsed.currency, parsed.qualifier, r.id);
+    }
+  } catch {
+    // Backfill ist best-effort und blockiert nie das Oeffnen.
+  }
+
   // Legt die Journey im Namensraum des Owners an (still, sofern fehlend).
   // Fremde Namensräume bleiben unberührt — gleiche Slugs verschiedener
   // User sind unabhängige Journeys.
@@ -456,6 +542,24 @@ function openDatabase(dbPathExplicit) {
     return info.changes > 0;
   }
 
+  function rowToItem(row) {
+    return {
+      name: row.name,
+      price: row.price,
+      priceAmount: row.price_amount !== null && row.price_amount !== undefined ? Number(row.price_amount) : null,
+      priceCurrency: row.price_currency || '',
+      priceQualifier: row.price_qualifier || '',
+      priceUpdatedAt: row.price_updated_at || '',
+      rating: row.rating,
+      status: row.status,
+      notes: row.notes,
+      link: row.link,
+      specs: specsJsonToString(row.specs),
+      pros: parseProsConsJson(row.pros),
+      cons: parseProsConsJson(row.cons),
+    };
+  }
+
   function getJourneyData(slug, owner) {
     requireOwner(owner);
     ensureOwnedJourney(slug, owner);
@@ -472,18 +576,10 @@ function openDatabase(dbPathExplicit) {
       .map((r) => ({ date: r.date, event: r.event }));
     const items = db
       .prepare(
-        'SELECT name, price, rating, status, notes, link, specs FROM items WHERE owner_id = ? AND journey_slug = ? ORDER BY position, id'
+        'SELECT name, price, price_amount, price_currency, price_qualifier, price_updated_at, rating, status, notes, link, specs, pros, cons FROM items WHERE owner_id = ? AND journey_slug = ? ORDER BY position, id'
       )
       .all(owner, slug)
-      .map((item) => ({
-        name: item.name,
-        price: item.price,
-        rating: item.rating,
-        status: item.status,
-        notes: item.notes,
-        link: item.link,
-        specs: specsJsonToString(item.specs),
-      }));
+      .map(rowToItem);
     const specs = db
       .prepare(
         'SELECT label, value FROM journey_specs WHERE owner_id = ? AND journey_slug = ? ORDER BY position, id'
@@ -491,6 +587,7 @@ function openDatabase(dbPathExplicit) {
       .all(owner, slug)
       .map((r) => ({ label: r.label, value: r.value }));
     const specComparison = parseSpecComparison(j.spec_comparison);
+    const criteria = getCriteria(slug, owner);
     return {
       status: { phase: j.phase, budget: j.budget, targetDate: j.target_date },
       journey,
@@ -500,6 +597,7 @@ function openDatabase(dbPathExplicit) {
       headers: ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link'],
       sectionTitle: j.section_title,
       listTitle: j.list_title,
+      criteria,
       ...(specComparison ? { specComparison } : {}),
     };
   }
@@ -530,6 +628,87 @@ function openDatabase(dbPathExplicit) {
         specs: specsJsonToString(item.specs),
       }));
     return { exists: true, items, hash: computeItemsHash(items) };
+  }
+
+  function getCriteria(slug, owner) {
+    requireOwner(owner);
+    try {
+      return db
+        .prepare('SELECT key, weight FROM journey_criteria WHERE owner_id = ? AND journey_slug = ? ORDER BY position, id')
+        .all(owner, slug)
+        .map((r) => ({ key: r.key, weight: r.weight }));
+    } catch {
+      return [];
+    }
+  }
+
+  function setCriteria(slug, owner, key, weight) {
+    requireOwner(owner);
+    const cleanKey = String(key || '').trim();
+    if (!cleanKey) {
+      const err = new Error('Kriterien-Key darf nicht leer sein.');
+      err.code = 'INVALID_CRITERIA';
+      throw err;
+    }
+    const w = Number(weight);
+    if (!Number.isInteger(w) || w < 1 || w > 5) {
+      const err = new Error('Gewicht muss eine ganze Zahl 1..5 sein.');
+      err.code = 'INVALID_CRITERIA';
+      throw err;
+    }
+    ensureOwnedJourney(slug, owner);
+    const existing = db
+      .prepare('SELECT id, key FROM journey_criteria WHERE owner_id = ? AND journey_slug = ? AND lower(key) = lower(?)')
+      .get(owner, slug, cleanKey);
+    if (existing) {
+      db.prepare("UPDATE journey_criteria SET weight = ?, key = ? WHERE id = ?").run(w, existing.key, existing.id);
+      return { key: existing.key, weight: w, created: false };
+    }
+    const pos = db
+      .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS nextPos FROM journey_criteria WHERE owner_id = ? AND journey_slug = ?')
+      .get(owner, slug).nextPos;
+    db.prepare('INSERT INTO journey_criteria (owner_id, journey_slug, key, weight, position) VALUES (?, ?, ?, ?, ?)')
+      .run(owner, slug, cleanKey, w, pos);
+    return { key: cleanKey, weight: w, created: true };
+  }
+
+  function deleteCriteria(slug, owner, key) {
+    requireOwner(owner);
+    const cleanKey = String(key || '').trim();
+    if (!cleanKey) return false;
+    const info = db
+      .prepare('DELETE FROM journey_criteria WHERE owner_id = ? AND journey_slug = ? AND lower(key) = lower(?)')
+      .run(owner, slug, cleanKey);
+    return info.changes > 0;
+  }
+
+  function getPriceHistory(slug, owner, itemName, limit = 20) {
+    requireOwner(owner);
+    const n = Math.max(1, Math.min(100, Number(limit) || 20));
+    const cleanName = String(itemName || '').trim();
+    if (!cleanName) {
+      const err = new Error('Produktname darf nicht leer sein.');
+      err.code = 'ITEM_NOT_FOUND';
+      throw err;
+    }
+    const item = db
+      .prepare('SELECT id FROM items WHERE owner_id = ? AND journey_slug = ? AND lower(name) = lower(?)')
+      .get(owner, slug, cleanName);
+    if (!item) {
+      const err = new Error(`Produkt "${itemName}" wurde in Journey "${slug}" nicht gefunden.`);
+      err.code = 'ITEM_NOT_FOUND';
+      throw err;
+    }
+    return db
+      .prepare('SELECT amount, currency, display, source, created_at AS at FROM price_history WHERE owner_id = ? AND journey_slug = ? AND lower(item_name) = lower(?) ORDER BY id DESC LIMIT ?')
+      .all(owner, slug, cleanName, n)
+      .map((r) => ({
+        amount: r.amount !== null && r.amount !== undefined ? Number(r.amount) : null,
+        currency: r.currency || '',
+        display: r.display || '',
+        source: r.source || '',
+        at: r.at || '',
+      }));
   }
 
   // Full-document replace (mirrors the old whole-file markdown writes).
@@ -586,24 +765,97 @@ function openDatabase(dbPathExplicit) {
       (data.specs || []).forEach((spec, i) => {
         insertSpec.run(owner, slug, spec.label || '', spec.value || '', i);
       });
+      // Alte Preise fuer Historie merken (vor DELETE).
+      const oldRows = db
+        .prepare('SELECT id, name, price, price_amount, price_currency, price_qualifier, price_updated_at, pros, cons FROM items WHERE owner_id = ? AND journey_slug = ?')
+        .all(owner, slug);
+      const oldByLower = new Map(
+        oldRows.map((r) => [String(r.name || '').toLowerCase(), r])
+      );
+      const journeyRow = db
+        .prepare('SELECT currency FROM journeys WHERE owner_id = ? AND slug = ?')
+        .get(owner, slug);
+      const fallbackCurrency = (journeyRow && journeyRow.currency) || '';
+      const source = (options && options.source) || 'ui';
+      const nowIso = new Date().toISOString();
       db.prepare('DELETE FROM items WHERE owner_id = ? AND journey_slug = ?').run(owner, slug);
       const insertItem = db.prepare(
-        `INSERT INTO items (owner_id, journey_slug, name, price, rating, status, notes, link, specs, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, json(?), ?)`
+        `INSERT INTO items (owner_id, journey_slug, name, price, price_amount, price_currency, price_qualifier, price_updated_at, rating, status, notes, link, specs, pros, cons, position, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, json(?), ?, ?, ?, ?)`
       );
+      const insertHistory = db.prepare(
+        'INSERT INTO price_history (owner_id, journey_slug, item_name, amount, currency, display, source) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      );
+      const normCurrency = (v) => (typeof v === 'string' && v.trim() ? v.trim().toUpperCase().slice(0, 3) : '');
+      const normQualifier = (v) => (typeof v === 'string' ? v.trim().slice(0, 20) : '');
       (data.items || []).forEach((item, i) => {
+        const display = item.price || '';
+        const lowerName = String(item.name || 'Unbenannt').toLowerCase();
+        const old = oldByLower.get(lowerName);
+        const hasExplicit = typeof item.priceAmount === 'number' && Number.isFinite(item.priceAmount);
+        const explicitAmount = hasExplicit ? Math.round(item.priceAmount * 100) / 100 : null;
+        const parsed = parsePrice(display, fallbackCurrency);
+        const displayChanged = !old || (old.price || '') !== display;
+        let amount = null;
+        let currency = '';
+        let qualifier = '';
+        if (displayChanged) {
+          // Der Anzeigetext ist, was der Nutzer sieht und editiert — er gewinnt.
+          // (Schuetzt vor veralteten priceAmount-Werten aus GET/POST-Round-Trips.)
+          if (parsed.amount !== null) {
+            amount = parsed.amount;
+            currency = parsed.currency;
+            qualifier = parsed.qualifier;
+          } else if (explicitAmount !== null) {
+            amount = explicitAmount;
+            currency = normCurrency(item.priceCurrency);
+            qualifier = normQualifier(item.priceQualifier);
+          }
+        } else if (explicitAmount !== null
+          && (old.price_amount === null || Number(old.price_amount) !== explicitAmount)) {
+          // Nur strukturiert geaendert (MCP), Anzeige bleibt.
+          amount = explicitAmount;
+          currency = normCurrency(item.priceCurrency) || old.price_currency || '';
+          qualifier = normQualifier(item.priceQualifier) || old.price_qualifier || '';
+        } else if (old) {
+          // Unveraendert: alte Werte behalten (kein Historien-Eintrag).
+          amount = old.price_amount === null ? null : Number(old.price_amount);
+          currency = old.price_currency || '';
+          qualifier = old.price_qualifier || '';
+        }
+        let pros = [];
+        let cons = [];
+        if (item.pros !== undefined) pros = normalizeProsCons(item.pros);
+        else if (old) pros = parseProsConsJson(old.pros);
+        if (item.cons !== undefined) cons = normalizeProsCons(item.cons);
+        else if (old) cons = parseProsConsJson(old.cons);
+        const priceChanged = !old
+          || (old.price || '') !== display
+          || (old.price_amount === null ? null : Number(old.price_amount)) !== amount
+          || (old.price_currency || '') !== currency;
+        const priceUpdatedAt = priceChanged ? nowIso : (item.priceUpdatedAt || (old && old.price_updated_at) || '');
         insertItem.run(
           owner,
           slug,
           item.name || 'Unbenannt',
-          item.price || '',
+          display,
+          amount,
+          currency,
+          qualifier,
+          priceUpdatedAt,
           item.rating || '',
           item.status || 'Thinking',
           item.notes || '',
           item.link || '',
           specsStringToJson(item.specs),
-          i
+          JSON.stringify(pros),
+          JSON.stringify(cons),
+          i,
+          nowIso
         );
+        if (priceChanged && display) {
+          insertHistory.run(owner, slug, item.name || 'Unbenannt', amount, currency, display, source);
+        }
       });
       db.exec('COMMIT');
     } catch (err) {
@@ -797,6 +1049,10 @@ function openDatabase(dbPathExplicit) {
       saveJourneyData,
       applySpecAlignment,
       computeItemsHash,
+      getCriteria,
+      setCriteria,
+      deleteCriteria,
+      getPriceHistory,
       getFeedback,
       saveFeedback,
       specValues,

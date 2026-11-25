@@ -1,104 +1,99 @@
 ---
 name: buying-journey-manager
-description: Verwalte Produkt-Kandidaten, Preise, Spezifikationen, Bewertungen und das Reisetagebuch in der SQLite-Datenbank für beliebige Kaufreisen.
+description: Verwalte Produkt-Kandidaten, Preise, Spezifikationen, Bewertungen und das Reisetagebuch für beliebige Kaufreisen über MCP-Tools oder die REST-API (mit SQLite-CLI als Legacy-Fallback).
 ---
 
 # Buying Journey Manager Skill
 
-Dieser Skill ermöglicht es dem Agenten, komfortabel und strukturiert Produktkandidaten sowie Meilensteine beliebiger Kaufreisen (z.B. Fahrräder, Elektroautos, Laptops) in der lokalen SQLite-Datenbank (`data/app.db`, via `src/db/store.js`) zu katalogisieren und zu pflegen. Jede Journey hat ihren eigenen Attributsatz, der schemalos als JSON in `items.specs` liegt.
+Dieser Skill steuert Kaufreisen (z. B. Fahrräder, Elektroautos, Laptops) im **MCP-First-Workflow**: Der Agent recherchiert Produkte selbst mit seinen eigenen Web-Werkzeugen und übergibt strukturierte Daten über die MCP-Tools (oder die REST-API) an das Backend.
 
-## 🛠️ Benutzung im CLI
+## 1. Primärer Workflow: MCP-Tools (`journey-path`)
 
-Der Skill stellt Skripte zur Verfügung, mit denen du über das Terminal direkt Daten eintragen kannst.
+Wenn der MCP-Server eingebunden ist, nutze ausschließlich die MCP-Tools:
 
-### 0. API-Key erzeugen (ein Key = ein User, für MCP-Zugriff)
-```bash
-node src/agent/scripts/create-api-key.js --user "jakob" --name "Muse MCP"
-```
-Der Klartext-Key erscheint genau einmal — er gehört als `MCP_AUTH_TOKEN` in die MCP-Einstellungen (`~/.config/muse/settings.json` → `mcpServers` → `env`). Auflisten mit `--list --user ...`, widerrufen mit `--revoke <id> --user ...`. Jeder User bekommt seinen eigenen Key; der MCP arbeitet damit ausschließlich im Namensraum dieses Users.
+1. **Orientierung holen:** `journey.help` liefert Workflows, gültige Status-/Phasen-Werte (`ITEM_STATUSES`, `PHASES`) und `specs`-Konventionen; `journey.list` zeigt vorhandene Kaufreisen.
+2. **Journey anlegen oder öffnen:** `journey.create` (legt neue Journey explizit an) bzw. `journey.get` (liest vollständiges Dokument ohne stilles Anlegen). Basis-Config/Anzeige-Titel bei Bedarf über `journey.update_config` anpassen.
+3. **Selbst recherchieren & strukturiert eintragen:** Recherchiere Produktseiten mit den eigenen Agent-Tools und speichere jedes Modell per `journey.add_item` (Upsert nach `name`, case-insensitiv; `specs` als Objekt mit klaren, konsistenten Keys wie `{"Gewicht": "15.8 kg", "Rahmen": "Alu"}`).
+   - Das Backend vereinheitlicht synonyme `specs`-Keys ab 2 Produkten automatisch im Hintergrund und pusht das Update per SSE an geöffnete Browser.
+4. **Weitere Bereiche pflegen:** `journey.update_meta` (Phase, Budget, Zieldatum, allgemeine Notizen), `journey.add_log` / `journey.delete_log` (Reisetagebuch), `journey.set_spec` / `journey.delete_spec` (journey-weite Eigenschaften auf `/eigenschaften`), `journey.set_feedback` (`/feedback`), `journey.delete_item` / `journey.delete`.
 
-### 1. Eintrag hinzufügen / aktualisieren
-```bash
-node src/agent/scripts/add-item.js \
-  --user "jakob" \
-  --journey "bike" \
-  --name "Cube Kathmandu Pro" \
-  --price "1499€" \
-  --rating 4 \
-  --status "Shortlisted" \
-  --weight "15.8 kg" \
-  --frame "Aluminium Superlite" \
-  --groupset "Shimano XT 3x10" \
-  --brakes "Shimano BR-MT200" \
-  --wheels "CUBE ZX20 / Schwalbe Range Cruiser 47mm" \
-  --notes "Probefahrt war super bequem, Sattel passt perfekt." \
-  --link "https://www.cube.eu/de-de/cube-kathmandu-pro-flashstone-n-black/831100"
-```
-*(Hinweis: Für andere Produktkategorien wie Autos oder Notebooks kannst du beliebige andere Attribute übergeben — sie landen schemalos als JSON in `items.specs` dieser Journey. Gib immer `--user` (Owner-Trennung: gleiche Slugs verschiedener User sind unabhängige Journeys) und den passenden Parameter `--journey` an. Es muss kein Server laufen: die Skripte schreiben direkt in `data/app.db`.)*
+**Gültige Item-Status-Werte:** `Thinking`, `Shortlisted`, `Test Ridden`, `Rejected`, `Bought`.  
+**Gültige Journey-Phasen:** `Planning`, `Researching`, `Test Riding`, `Comparing`, `Decision`, `Purchased`.
 
-**Mögliche Status-Werte:**
-- `Thinking` (In Erwägung)
-- `Shortlisted` (Engere Auswahl)
-- `Test Ridden` (Erprobt/Besichtigt)
-- `Rejected` (Ausgeschieden)
-- `Bought` (Gekauft! 🏆)
+## 1b. Vergleich, Preise, Entscheidung (neue Tools)
 
-### 2. Tagebucheintrag (Reise) hinzufügen
-```bash
-node src/agent/scripts/add-log.js \
-  --user "jakob" \
-  --journey "bike" \
-  --event "Erste Probefahrt mit dem Cube Kathmandu gemacht" \
-  --date "2026-07-16"
-```
-*(Das Datum `--date` ist optional und verwendet standardmäßig das heutige Datum.)*
-
-### 2b. Neue Journey per REST anlegen (statt Direkt-DB)
-
-Voraussetzung: Das Backend läuft (`npm run dev:server` bzw. `npm start`, Default-Port `3000`, vgl. `.env` `PORT`; Datenbank via `DB_PATH`, Default `data/app.db`). Die Basis-URL ist konfigurierbar, z.B. `BASE_URL="http://localhost:3000"`.
-
-```bash
-BASE_URL="http://localhost:3000"
-# Anlegen — Slug ist Pflicht, Phase/Budget/Zieldatum/Notizen optional
-curl -s -X POST "$BASE_URL/api/journeys" -H 'Content-Type: application/json' \
-  -d '{"slug":"smartphone","phase":"Planning","budget":"800€","targetDate":"2026-12-31","generalNotes":"- Modelle vergleichen"}'
-# Prüfen — die neue Journey muss in der Liste stehen
-curl -s "$BASE_URL/api/journeys"
-```
-
-- Slug-Regel wie im Frontend (`frontend/src/lib/journey-id.ts`): Kleinbuchstaben, nur `a-z 0-9 . -`. Das Backend normalisiert genauso (`"SmartPhone"` → `"smartphone"`).
-- Antworten: `201 {success, slug}` angelegt; `409` Slug existiert bereits; `400` fehlender/leerer/ungültiger Slug (kein stilles Anlegen, kein Fallback auf `bike`).
-- Wenn das Backend nicht läuft, schlägt der `curl`-Aufruf mit einem klaren Verbindungsfehler fehl — es wird nichts geschrieben (kein stilles SQLite-Schreiben in diesem Pfad).
-- Die Direkt-SQLite-Skripte (`add-item.js`/`add-log.js`) bleiben für die Item-/Log-Pflege unverändert; dieser REST-Pfad schreibt nie direkt in die DB.
-
-### 3. Produkt aus URL hinzufügen (Crawl & Extract)
-```bash
-node \
-  src/agent/scripts/crawl-and-extract.js \
-  "https://example.com/product-page" \
-  [optional_screenshot_path]
-```
-Das Skript lädt die Seite headless über Puppeteer und speichert das Ergebnis im Ordner `src/agent/temp/last-crawl.json`.
+- **Vergleichen:** `journey.compare` (`slug`, optional `status`/`sort`/`dir`) liefert Preisspanne, Scores mit `breakdown`/`reasons`, gemeinsame vs. einzelne Eigenschaften und `missing`-Lücken. Beispiel: `journey.compare` mit `slug: "badheizkoerper"`, `sort: "price"`.
+- **Selektiv lesen:** `journey.get` versteht zusätzlich `status`, `search`, `sort`, `dir`, `limit`, `offset`, `fields`. Ohne Optionen kommt das Voll-Dokument wie bisher.
+- **Preise strukturiert:** `journey.add_item` nimmt `priceAmount`, `priceCurrency`, `priceQualifier` sowie `pros`/`cons` (Arrays). Der Anzeigetext `price` bleibt führend und gewinnt bei Änderung.
+- **Verlauf:** `journey.price_history` (`slug`, `name`, optional `limit`) zeigt den Preisverlauf, neueste zuerst.
+- **Kriterien & Shortlist:** `journey.set_criteria` / `journey.delete_criteria` gewichten Spec-Keys (oder `price`/`rating`) 1..5; `journey.shortlist` (`slug`, `n`, optional `status`) nennt Top-N mit Begründung und Budget-Urteil, ändert aber keinen Status.
 
 ---
 
-## 🤖 Anweisungen für den Agenten
+## 2. Alternativweg: REST-API mit API-Key (`curl`)
 
-### A. Wenn der User ein Produkt oder ein Ereignis direkt nennt:
-1. Nutze `run_command` und führe das entsprechende Skript (`add-item.js` oder `add-log.js`) mit den übergebenen Parametern **plus `--user "<user-id>"`** im Projekt-Root unter Verwendung der Pfade (`src/agent/scripts/...`) aus. Ohne `--user` brechen die Skripte ab (Owner-Trennung). Es muss kein Server laufen — die Skripte schreiben direkt in die SQLite-DB (`data/app.db`).
-2. Die Daten liegen nur noch lokal in SQLite.
-3. Gib dem User eine kurze Bestätigung mit einem Link zum Web-Interface.
+Voraussetzung: Das Backend läuft (`npm run dev:server` oder `npm start`, Default-Port `3000` bzw. `1337` laut `.env.example`) und es liegt ein gültiger Bearer-Token (`MCP_AUTH_TOKEN`, Format `bj_…`) vor. Alle Daten-Routen verlangen `Authorization: Bearer <TOKEN>`.
 
-### B. Wenn der User eine URL nennt, um ein Produkt zu einer Kaufreise hinzuzufügen:
-1. **Journey klären**: Prüfe, ob die Ziel-Kaufreise klar ist.
-   * Lade die Liste der verfügbaren Reisen über die API (`GET /api/journeys`).
-   * Wenn unklar (z.B. mehrere Reisen passen oder es ist eine neue Kategorie), frage den User, ob er ein existierendes Journey (z.B. `bike`, `laptop`, `ev`) erweitern oder ein neues Journey (z.B. `smartphone`) anlegen möchte.
-   * Für eine neue Kategorie: Schlage nach dem Crawl einen Journey-Namen per `src/agent/prompts/journey_naming_prompt.md` vor (Produkt verallgemeinern, z.B. Model 3 → "Elektro-Auto") und lass ihn vom User bestätigen. Per MCP geht das automatisch (`journey.create_from_link` ohne `slug`, Benennung via `POST /api/suggest-journey`).
-2. **Crawl ausführen**: Führe das Skript `src/agent/scripts/crawl-and-extract.js` per `run_command` mit der URL aus.
-3. **Daten extrahieren**: Lies die Ergebnisdatei `src/agent/temp/last-crawl.json` mit `view_file` aus.
-4. **LLM-Verarbeitung**:
-   * Analysiere den extrahierten Text unter Berücksichtigung von `src/agent/prompts/product_extraction_prompt.md`.
-   * Identifiziere den Produktnamen, Preis, Bewertung und 3-6 relevante technische Vergleichskriterien (Specs) passend zur Produktkategorie.
-5. **Eintrag speichern**: Führe das Skript `src/agent/scripts/add-item.js` mit den extrahierten Werten **plus `--user "<user-id>"`** aus (neue Journeys werden automatisch mit Defaults im Namensraum dieses Users angelegt).
-6. **Bestätigen**: Präsentiere dem User die extrahierten Kriterien als Tabelle zur Kontrolle und bestätige den Eintrag.
+```bash
+BASE_URL="http://localhost:3000"
+TOKEN="bj_..."
 
+# Alle Slugs des Users auflisten
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/journeys"
+
+# Neue Journey explizit anlegen (201 angelegt, 409 Duplikat, 400 ungültiger Slug)
+curl -s -X POST "$BASE_URL/api/journeys" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"slug":"smartphone","name":"Smartphone","category":"laptop","phase":"Planning","budget":"800€"}'
+
+# Dokument lesen oder speichern (POST /api/data triggert SSE + ab 2 Items Property-Abgleich)
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/data?journey=smartphone"
+```
+
+- Slug-Normalisierung (wie `frontend/src/lib/journey-id.ts`): Kleinbuchstaben, nur `a-z 0-9 . -`.
+- Läuft das Backend nicht, schlägt `curl` mit Verbindungsfehler fehl — es wird nie still lokal geschrieben.
+
+---
+
+## 3. API-Keys per CLI verwalten (ohne laufenden Server)
+
+Falls kein Browser-Login genutzt wird, lassen sich API-Keys direkt in `data/app.db` erzeugen, listen oder widerrufen:
+
+```bash
+node src/agent/scripts/create-api-key.js --user "jakob" --name "Claude Desktop"
+node src/agent/scripts/create-api-key.js --list --user "jakob"
+node src/agent/scripts/create-api-key.js --revoke 3 --user "jakob"
+```
+
+Der Klartext-Key erscheint genau einmal — er gehört als `MCP_AUTH_TOKEN` in die Client-Konfiguration.
+
+---
+
+## 4. Legacy-Offline-Skripte (Direkt-SQLite, nur wenn Backend nicht läuft)
+
+Die folgenden CLI-Skripte schreiben direkt in `data/app.db` (ohne SSE-Broadcast und ohne serverseitigen KI-Property-Abgleich) und dienen nur noch als Offline-Fallback:
+
+- **Item anlegen/aktualisieren:**
+  ```bash
+  node src/agent/scripts/add-item.js \
+    --user "jakob" \
+    --journey "bike" \
+    --name "Cube Kathmandu Pro" \
+    --price "1499€" \
+    --rating 4 \
+    --status "Shortlisted" \
+    --gewicht "15.8 kg" \
+    --rahmen "Aluminium Superlite" \
+    --notes "Probefahrt war super bequem."
+  ```
+- **Tagebucheintrag hinzufügen:**
+  ```bash
+  node src/agent/scripts/add-log.js \
+    --user "jakob" \
+    --journey "bike" \
+    --event "Erste Probefahrt gemacht" \
+    --date "2026-07-16"
+  ```
+
+*(Hinweis: Das frühere Puppeteer-Crawl-Skript `crawl-and-extract.js` wurde im Zuge des MCP-First-Umbaus entfernt — Web-Recherche übernimmt ausschließlich der KI-Client.)*

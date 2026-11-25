@@ -12,11 +12,46 @@ export interface JourneyLogEntry {
 export interface JourneyItem {
   name: string
   price?: string
+  priceAmount?: number | null
+  priceCurrency?: string
+  priceQualifier?: string
+  priceUpdatedAt?: string
   specs?: string
   rating?: string
   status?: string
   notes?: string
   link?: string
+  pros?: string[]
+  cons?: string[]
+}
+
+export interface JourneyCriteria {
+  key: string
+  weight: number
+}
+
+export interface CompareItemScore {
+  name: string
+  price: string
+  priceAmount: number | null
+  priceCurrency: string
+  priceQualifier?: string
+  rating: number
+  status?: string
+  pros: string[]
+  cons: string[]
+  score: number
+  breakdown: { ratingPoints: number; prosConsPoints: number; pricePoints: number; criteriaPoints: number }
+  reasons: string[]
+  overBudget: boolean | null
+}
+
+export interface PriceHistoryEntry {
+  amount: number | null
+  currency: string
+  display: string
+  source: string
+  at: string
 }
 
 export interface JourneySpec {
@@ -66,6 +101,7 @@ export interface JourneyData {
   sectionTitle: string
   listTitle: string
   specComparison?: SpecComparison
+  criteria?: JourneyCriteria[]
 }
 
 export const ITEM_STATUSES = [

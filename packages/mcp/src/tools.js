@@ -4,7 +4,7 @@
 // Einzige Quelle für Name/Version/Protokoll + Tool-Liste (jeweils mit
 // name, description UND inputSchema). CommonJS, keine Dependencies.
 
-const SERVER_INFO = { name: 'bike-buying-journey', version: '1.0.0' };
+const SERVER_INFO = { name: 'journey-path', version: '1.0.0' };
 const PROTOCOL_VERSION = '2024-11-05';
 
 const ITEM_STATUSES = ['Thinking', 'Shortlisted', 'Test Ridden', 'Rejected', 'Bought'];
@@ -86,11 +86,90 @@ const TOOL_DEFS = [
   {
     name: 'journey.get',
     description:
-      'Liest das komplette Dokument einer Buying Journey (Status, Logs, Items, Specs, Notizen, Feedback, Config mit Basis-Eigenschaften und Settings). Nur Lesen, legt nichts an.',
+      'Liest eine Buying Journey (Status, Logs, Items, Specs, Notizen, Feedback, Config, Kriterien). Ohne Optionen Voll-Dokument; mit status/search/sort/limit/offset/fields selektiv filtern. Nur Lesen, legt nichts an.',
     inputSchema: {
       type: 'object',
-      properties: { slug: { type: 'string', description: 'Journey-Kürzel, z.B. "bike"' } },
+      properties: {
+        slug: { type: 'string', description: 'Journey-Kürzel, z.B. "bike"' },
+        status: { type: 'string', description: 'Status-Filter, z.B. "Thinking" (mehrere per Komma)' },
+        search: { type: 'string', description: 'Substring-Suche ueber Name, Notizen, Specs' },
+        sort: { type: 'string', description: 'Sortierung', enum: ['position', 'price', 'rating', 'name'] },
+        dir: { type: 'string', description: 'Richtung', enum: ['asc', 'desc'] },
+        limit: { type: 'number', description: 'Max. Items 1..200', minimum: 1, maximum: 200 },
+        offset: { type: 'number', description: 'Offset >= 0', minimum: 0 },
+        fields: { type: 'string', description: 'Kommaliste, z.B. "items,status"' },
+        includeSpecComparison: { type: 'boolean', description: 'specComparison mitschicken' },
+        includeFeedback: { type: 'boolean', description: 'Feedback mitschicken' },
+        includeConfig: { type: 'boolean', description: 'Config mitschicken' },
+      },
       required: ['slug'],
+    },
+  },
+  {
+    name: 'journey.compare',
+    description:
+      'Vergleicht alle (oder gefilterte) Produkte einer Journey: Preisspanne, Scores, gemeinsame vs. einzelne Eigenschaften, Luecken. Lesend, schreibt nichts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'Journey-Kürzel, z.B. "bike"' },
+        status: { type: 'string', description: 'Status-Filter, z.B. "Thinking"' },
+        sort: { type: 'string', description: 'Sortierung', enum: ['position', 'price', 'rating', 'name'] },
+        dir: { type: 'string', description: 'Richtung', enum: ['asc', 'desc'] },
+      },
+      required: ['slug'],
+    },
+  },
+  {
+    name: 'journey.shortlist',
+    description:
+      'Top-N nach deterministischem Score (Rating, Preis, Pro/Contra, Kriterien) plus Budget-Urteil. Lesend, aendert keinen Status.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'Journey-Kürzel, z.B. "bike"' },
+        n: { type: 'number', description: 'Anzahl 1..10 (Default 3)', minimum: 1, maximum: 10 },
+        status: { type: 'string', description: 'Status-Filter (Default alle ausser Rejected)' },
+      },
+      required: ['slug'],
+    },
+  },
+  {
+    name: 'journey.price_history',
+    description: 'Preisverlauf eines Produkts (neueste zuerst). Lesend.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'Journey-Kürzel, z.B. "bike"' },
+        name: { type: 'string', description: 'Produktname' },
+        limit: { type: 'number', description: 'Max. Eintraege 1..100 (Default 20)', minimum: 1, maximum: 100 },
+      },
+      required: ['slug', 'name'],
+    },
+  },
+  {
+    name: 'journey.set_criteria',
+    description: 'Gewichtet ein Vergleichskriterium (Spec-Key oder price|rating) mit 1..5.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'Journey-Kürzel, z.B. "bike"' },
+        key: { type: 'string', description: 'Kriterien-Key, z.B. "Gewicht" oder "price"' },
+        weight: { type: 'number', description: 'Gewicht 1..5', minimum: 1, maximum: 5 },
+      },
+      required: ['slug', 'key', 'weight'],
+    },
+  },
+  {
+    name: 'journey.delete_criteria',
+    description: 'Entfernt ein Vergleichskriterium.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'Journey-Kürzel, z.B. "bike"' },
+        key: { type: 'string', description: 'Kriterien-Key' },
+      },
+      required: ['slug', 'key'],
     },
   },
   {
@@ -103,6 +182,9 @@ const TOOL_DEFS = [
         slug: { type: 'string', description: 'Journey-Kürzel, z.B. "bike"' },
         name: { type: 'string', description: 'Produktname (Pflicht, legt die Upsert-Identität fest)' },
         price: { type: 'string', description: 'Preis als Freitext, z.B. "1499€"' },
+        priceAmount: { type: 'number', description: 'Strukturierter Betrag (gewinnt ueber Parser)' },
+        priceCurrency: { type: 'string', description: 'ISO-Code, z.B. "EUR"' },
+        priceQualifier: { type: 'string', description: 'Qualifier, z.B. "ab"' },
         rating: { type: 'number', description: 'Bewertung 0-5 (wird in ⭐-Format umgewandelt)', minimum: 0, maximum: 5 },
         status: { type: 'string', description: 'Status des Eintrags', enum: ITEM_STATUSES },
         notes: { type: 'string', description: 'Notizen zum Eintrag' },
@@ -112,6 +194,8 @@ const TOOL_DEFS = [
           description: 'Freie technische Vergleichskriterien, z.B. {"weight": "15.8 kg"}',
           additionalProperties: { type: 'string' },
         },
+        pros: { type: 'array', description: 'Pro-Liste (max. 20 x 200 Zeichen)', items: { type: 'string' } },
+        cons: { type: 'array', description: 'Contra-Liste (max. 20 x 200 Zeichen)', items: { type: 'string' } },
       },
       required: ['slug', 'name'],
     },

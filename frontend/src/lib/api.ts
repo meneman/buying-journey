@@ -1,4 +1,10 @@
-import type { JourneyConfig, JourneyConfigPatch, JourneyData } from './types'
+import type {
+  JourneyConfig,
+  JourneyConfigPatch,
+  JourneyCriteria,
+  JourneyData,
+  PriceHistoryEntry,
+} from './types'
 import { getAccessToken } from './supabase'
 
 /** Authorization-Header der Supabase-Session (leer, wenn abgemeldet/nicht konfiguriert). */
@@ -185,4 +191,48 @@ export function revokeApiKey(id: number | string): Promise<{ success: boolean }>
 
 export function fetchFeedback(journey: string): Promise<{ content: string }> {
   return request(`/api/feedback?journey=${encodeURIComponent(journey)}`)
+}
+
+export function fetchCompare(
+  journey: string,
+  opts?: { status?: string; sort?: string; dir?: string },
+): Promise<{ items: { name: string; score: number; overBudget: boolean | null }[]; priceRange: unknown }> {
+  const sp = new URLSearchParams({ journey })
+  if (opts?.status) sp.set('status', opts.status)
+  if (opts?.sort) sp.set('sort', opts.sort)
+  if (opts?.dir) sp.set('dir', opts.dir)
+  return request(`/api/compare?${sp.toString()}`)
+}
+
+export function fetchShortlist(
+  journey: string,
+  n = 3,
+): Promise<{ items: { name: string; score: number; reasons: string[] }[] }> {
+  return request(`/api/shortlist?journey=${encodeURIComponent(journey)}&n=${n}`)
+}
+
+export function fetchPriceHistory(journey: string, name: string): Promise<{ history: PriceHistoryEntry[] }> {
+  return request(`/api/price-history?journey=${encodeURIComponent(journey)}&name=${encodeURIComponent(name)}`)
+}
+
+export function fetchCriteria(journey: string): Promise<{ criteria: JourneyCriteria[] }> {
+  return request(`/api/criteria?journey=${encodeURIComponent(journey)}`)
+}
+
+export function setCriteria(
+  journey: string,
+  key: string,
+  weight: number,
+): Promise<{ success: boolean; key: string; weight: number }> {
+  return request(`/api/criteria?journey=${encodeURIComponent(journey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, weight }),
+  })
+}
+
+export function deleteCriteria(journey: string, key: string): Promise<{ success: boolean }> {
+  return request(`/api/criteria?journey=${encodeURIComponent(journey)}&key=${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+  })
 }

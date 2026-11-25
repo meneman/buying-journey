@@ -6,6 +6,10 @@ kanban-plugin: board
 
 ## todo
 
+## progress
+
+## done
+
 - [ ] Doku, Skill & Naming auf MCP-First angleichen (`README.md`, Obsidian-Vault, Skill & `bike`-Altlasten)
   - Scope (geklärt): Gesamte Projektdokumentation und verbliebene Alt-Bezeichnungen auf den aktuellen **MCP-First**-Stand (mit Client-seitigem Eintragen + serverseitigem Property-Abgleich) ziehen — idealerweise als Abschluss nach Umsetzung der MCP-/Abgleich-Karten.
   - `README.md` & `docs/vault/` (`Was-ist-JourneyPath.md`, `Architektur/Übersicht.md`, `Architektur/Backend.md`, `Architektur/Frontend.md`, `docs/local/MANUAL_TESTS.md`):
@@ -14,10 +18,7 @@ kanban-plugin: board
   - Skill & CLI-Skripte (`.agents/skills/buying-journey-manager/SKILL.md`, `src/agent/scripts/`): auf MCP/REST-Workflow angleichen bzw. veraltete Direkt-DB-/Puppeteer-Crawl-Anweisungen (`crawl-and-extract.js`, `last-crawl.json`) bereinigen oder klar als Legacy markieren/entfernen.
   - `bike`-Altlasten bereinigen: `SERVER_INFO.name` (`bike-buying-journey` → `journey-path` in `packages/mcp/src/tools.js` + Tests), `package.json` (`name`/`description`), Beispiel-Prompts & Standard-Servername in `frontend/src/pages/Mcp.tsx` und `README.md` (Achtung: in `Mcp.tsx` prüfen, ob `npx -y @journey-path/mcp` sinnvoll als Default bleibt oder lokaler Node-Pfad priorisiert werden sollte, solange das Paket nicht auf npm liegt).
   - Akzeptanz: Keine Widersprüche mehr zwischen Doku, `Mcp.tsx`, Skill und tatsächlichem Code; keine veralteten Verweise auf gelöschte UI-Komponenten oder entfernte Crawl-Tools; `npm test` grün, `npm run build` ok.
-
-## progress
-
-## done
+  - Erledigt 2026-11-24: Gesamte Projektdokumentation (`README.md`, `docs/vault/README.md`, `docs/vault/Was-ist-JourneyPath.md`, `docs/vault/Architektur/Übersicht.md`, `docs/vault/Architektur/Backend.md`, `docs/vault/Architektur/Frontend.md`) sowie `.agents/skills/buying-journey-manager/SKILL.md` vollständig auf den MCP-First-Stand inkl. aller 14 MCP-Tools, aktueller REST-Endpunkte, Env-Variablen, serverseitigem KI-Property-Abgleich (`spec-alignment.js`), `Compare`-Gruppierung und `<LoginGate>`-Verhalten (inkl. `/mcp`) umgeschrieben; veraltete UI-/Crawl-Abschnitte entfernt. Veraltete Puppeteer-/Crawl-Altlasten (`src/agent/scripts/crawl-and-extract.js`, `src/agent/temp/last-crawl.json`, `.agents/skills/buying-journey-manager/temp/last-crawl.json`, `src/agent/prompts/journey_naming_prompt.md`, `src/agent/prompts/product_extraction_prompt.md`) gelöscht und direkte SQLite-Skripte (`add-item.js`/`add-log.js`) im Skill als Legacy-Offline-Fallback markiert. `bike`-Altlasten bereinigt: `SERVER_INFO.name` in `packages/mcp/src/tools.js` auf `'journey-path'` geändert (inkl. Assertions in `test/mcp.test.js` und `test/server.test.js`), `package.json` (`name: "journey-path"`, neue `description`) aktualisiert, in `frontend/src/pages/Mcp.tsx` Muse-Serverkey auf `'journey-path'` umbenannt und Default-Install-Mode auf `'local'` (`node <serverFile>`, da `@journey-path/mcp` noch nicht auf npm liegt) umgestellt. Verifikation: `npm test` 105/105 Backend + 9/9 Frontend-Unit-Tests grün, `npm --prefix frontend run build` (`tsc -b && vite build`) erfolgreich, `npm --prefix frontend run lint` (`oxlint`) 0 Errors (10 vorbestehende Warnungen). Manuelle Browser-Verifikation für `/mcp` ausstehend, siehe `docs/local/MANUAL_TESTS.md`.
 
 - [ ] Server-KI-Abgleich für Item-Properties (`specs`): Synonyme vereinheitlichen & gemeinsame vs. Einzel-Eigenschaften ermitteln
   - Ziel (geklärt): Der Client trägt Produkte frei mit seinen gewählten `specs` ein. Danach prüft der Server per KI-Call, ob unterschiedliche Property-Namen dasselbe meinen (z. B. `Weight` / `Gewicht` / `Gesamtgewicht` → einheitlicher Key) und welche Eigenschaften **alle Items** der Journey gemeinsam haben vs. welche nur bei **einzelnen Items** vorkommen.

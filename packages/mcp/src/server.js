@@ -169,11 +169,17 @@ function invalidParams(message) {
   return err;
 }
 
-// Prüft die optionalen Item-Felder (Preis/Notizen/Rating/Status/Specs) für journey.add_item.
+// Prüft die optionalen Item-Felder für journey.add_item (inkl. Preise, Pro/Contra).
 function validateOptionalItemFields(args) {
-  for (const key of ['price', 'notes']) {
+  for (const key of ['price', 'notes', 'priceCurrency', 'priceQualifier']) {
     if (args[key] !== undefined && typeof args[key] !== 'string') {
       throw invalidParams(`Parameter "${key}" muss ein String sein.`);
+    }
+  }
+  if (args.priceAmount !== undefined) {
+    const num = typeof args.priceAmount === 'string' ? Number(args.priceAmount) : args.priceAmount;
+    if (typeof num !== 'number' || !Number.isFinite(num) || num < 0) {
+      throw invalidParams('Parameter "priceAmount" muss eine Zahl >= 0 sein.');
     }
   }
   let rating;
@@ -199,7 +205,28 @@ function validateOptionalItemFields(args) {
       specs[k] = v;
     }
   }
-  return { price: args.price, rating, status: args.status, notes: args.notes, specs };
+  for (const key of ['pros', 'cons']) {
+    if (args[key] !== undefined) {
+      if (!Array.isArray(args[key])) throw invalidParams(`Parameter "${key}" muss ein Array aus Strings sein.`);
+      if (args[key].length > 20) throw invalidParams(`Parameter "${key}" darf max. 20 Eintraege haben.`);
+      for (const entry of args[key]) {
+        if (typeof entry !== 'string') throw invalidParams(`Parameter "${key}" darf nur Strings enthalten.`);
+        if (entry.trim().length > 200) throw invalidParams(`Parameter "${key}" darf max. 200 Zeichen je Eintrag haben.`);
+      }
+    }
+  }
+  return {
+    price: args.price,
+    priceAmount: args.priceAmount !== undefined ? Number(args.priceAmount) : undefined,
+    priceCurrency: args.priceCurrency,
+    priceQualifier: args.priceQualifier,
+    rating,
+    status: args.status,
+    notes: args.notes,
+    specs,
+    pros: args.pros,
+    cons: args.cons,
+  };
 }
 
 // Prüft die Argumente von journey.add_item. Gibt normalisierte Werte zurück
@@ -225,7 +252,8 @@ function validateAddItemArgs(raw) {
 }
 
 async function handleAddItem(params) {
-  const { slug, name, price, rating, status, notes, link, specs } = validateAddItemArgs(params);
+  const { slug, name, price, priceAmount, priceCurrency, priceQualifier, rating, status, notes, link, specs, pros, cons } =
+    validateAddItemArgs(params);
   await assertKnownJourney(slug);
   const data = await getJson(`${BASE_URL}/api/data?journey=${encodeURIComponent(slug)}`);
   data.items = Array.isArray(data.items) ? data.items : [];
@@ -240,10 +268,15 @@ async function handleAddItem(params) {
   // nicht übergebene Felder behalten ihren bisherigen Wert.
   const patch = { name };
   if (price !== undefined) patch.price = price;
+  if (priceAmount !== undefined) patch.priceAmount = priceAmount;
+  if (priceCurrency !== undefined) patch.priceCurrency = priceCurrency;
+  if (priceQualifier !== undefined) patch.priceQualifier = priceQualifier;
   if (status !== undefined) patch.status = status;
   if (rating !== undefined) patch.rating = starsFromRating(rating);
   if (notes !== undefined) patch.notes = notes;
   if (link !== undefined) patch.link = link;
+  if (pros !== undefined) patch.pros = pros;
+  if (cons !== undefined) patch.cons = cons;
 
   // Specs mergen: gleiche Keys (case-insensitiv) überschreiben, neue Keys
   // kommen mit großgeschriebenem Anfangsbuchstaben dazu.
@@ -269,7 +302,7 @@ async function handleAddItem(params) {
   data.headers = ['Name', 'Price', 'Specs', 'Rating', 'Status', 'Notes', 'Link'];
 
   try {
-    await postJson(`${BASE_URL}/api/data?journey=${encodeURIComponent(slug)}`, data);
+    await postJson(`${BASE_URL}/api/data?journey=${encodeURIComponent(slug)}&source=mcp`, data);
   } catch (err) {
     if (err.message.includes('nicht erreichbar')) throw err;
     throw new Error(`Speichern in Journey "${slug}" ist fehlgeschlagen: ${err.message}`);
@@ -350,12 +383,28 @@ async function mutateJourneyData(slug, transform) {
   const data = await getJson(`${BASE_URL}/api/data?journey=${encodeURIComponent(slug)}`);
   const outcome = transform(data);
   try {
-    await postJson(`${BASE_URL}/api/data?journey=${encodeURIComponent(slug)}`, data);
+    await postJson(`${BASE_URL}/api/data?journey=${encodeURIComponent(slug)}&source=mcp`, data);
   } catch (err) {
     if (err.message.includes('nicht erreichbar') || err.status === 401 || err.status === 403) throw err;
     throw new Error(`Speichern in Journey "${slug}" ist fehlgeschlagen: ${err.message}`);
   }
   return outcome;
+}
+
+function buildDataQuery(slug, args = {}) {
+  const params = new URLSearchParams({ journey: slug });
+  for (const key of ['status', 'search', 'sort', 'dir', 'fields']) {
+    if (args[key] !== undefined && args[key] !== null && String(args[key]).trim() !== '') {
+      params.set(key, String(args[key]));
+    }
+  }
+  for (const key of ['limit', 'offset']) {
+    if (args[key] !== undefined && args[key] !== null) params.set(key, String(args[key]));
+  }
+  for (const key of ['includeSpecComparison', 'includeFeedback', 'includeConfig']) {
+    if (args[key] !== undefined) params.set(key, args[key] ? '1' : '0');
+  }
+  return params.toString();
 }
 
 function handleHelp() {
@@ -364,11 +413,12 @@ function handleHelp() {
     description:
       'JourneyPath verwaltet Kaufreisen (Journeys) mit Produktkandidaten, Vergleichs-Specs, Status/Budget, Reisetagebuch, journey-weiten Eigenschaften und Feedback. Der KI-Client recherchiert selbst und pflegt alle Daten strukturiert über diese Tools.',
     workflows: [
-      '1. Überblick holen: `journey.list` zeigt vorhandene Kaufreisen; `journey.get` liest alle Details einer Journey.',
+      '1. Überblick holen: `journey.list` zeigt vorhandene Kaufreisen; `journey.get` liest Details (ohne Optionen voll, mit status/search/sort/limit selektiv).',
       '2. Neue Liste anlegen: `journey.create` legt eine Journey per Slug + optionalen Metadaten an; `journey.update_config` ändert Name/Kategorie/Währung/Überschriften.',
-      '3. Produkte pflegen: `journey.add_item` legt Kandidaten an oder aktualisiert sie (Upsert nach Name) inkl. `specs`-Objekt; `journey.delete_item` entfernt ein Produkt.',
-      '4. Reise begleiten: `journey.update_meta` aktualisiert Phase/Budget/Zieldatum/Notizen; `journey.add_log` / `journey.delete_log` pflegen das Tagebuch.',
-      '5. Rahmenwerte & Feedback: `journey.set_spec` / `journey.delete_spec` verwalten journey-weite Eigenschaften (/eigenschaften); `journey.set_feedback` schreibt /feedback.',
+      '3. Produkte pflegen: `journey.add_item` legt Kandidaten an oder aktualisiert sie (Upsert nach Name) inkl. `specs`, Preis, Pro/Contra; `journey.delete_item` entfernt ein Produkt.',
+      '4. Vergleichen & Entscheiden: `journey.compare` zeigt Preisspanne, Scores, Gemeinsamkeiten/Luecken; `journey.shortlist` nennt Top-N mit Begruendung; `journey.price_history` zeigt Preisverlauf.',
+      '5. Reise begleiten: `journey.update_meta` aktualisiert Phase/Budget/Zieldatum/Notizen; `journey.add_log` / `journey.delete_log` pflegen das Tagebuch; `journey.set_criteria` gewichtet Kriterien.',
+      '6. Rahmenwerte & Feedback: `journey.set_spec` / `journey.delete_spec` verwalten journey-weite Eigenschaften (/eigenschaften); `journey.set_feedback` schreibt /feedback.',
     ],
     enums: {
       itemStatuses: ITEM_STATUSES,
@@ -651,16 +701,92 @@ async function handleSetFeedback(params) {
   return jsonResult({ success: true, slug, length: args.content.length });
 }
 
+async function handleGet(params) {
+  const args = (params && params.arguments) || {};
+  const slug = requireSlug(args);
+  const hasFilter = ['status', 'search', 'sort', 'dir', 'limit', 'offset', 'fields', 'includeSpecComparison', 'includeFeedback', 'includeConfig']
+    .some((k) => args[k] !== undefined);
+  if (!hasFilter) return jsonResult(await readJourney(slug));
+  await assertKnownJourney(slug);
+  if (args.limit !== undefined) {
+    const n = Number(args.limit);
+    if (!Number.isInteger(n) || n < 1 || n > 200) throw invalidParams('Parameter "limit" muss 1..200 sein.');
+  }
+  if (args.offset !== undefined) {
+    const n = Number(args.offset);
+    if (!Number.isInteger(n) || n < 0) throw invalidParams('Parameter "offset" muss >= 0 sein.');
+  }
+  const data = await getJson(`${BASE_URL}/api/data?${buildDataQuery(slug, args)}`);
+  const feedback = args.includeFeedback ? await getJson(`${BASE_URL}/api/feedback?journey=${encodeURIComponent(slug)}`) : null;
+  const config = args.includeConfig || (args.fields && String(args.fields).includes('config'))
+    ? await getJson(`${BASE_URL}/api/journey-config?journey=${encodeURIComponent(slug)}`)
+    : null;
+  return jsonResult({ slug, ...data, ...(feedback ? { feedback: feedback.content } : {}), ...(config ? { config } : {}) });
+}
+
+async function handleCompare(params) {
+  const args = (params && params.arguments) || {};
+  const slug = requireSlug(args);
+  const sp = new URLSearchParams({ journey: slug });
+  for (const key of ['status', 'sort', 'dir']) {
+    if (args[key] !== undefined) sp.set(key, String(args[key]));
+  }
+  await assertKnownJourney(slug);
+  return jsonResult(await getJson(`${BASE_URL}/api/compare?${sp.toString()}`));
+}
+
+async function handleShortlist(params) {
+  const args = (params && params.arguments) || {};
+  const slug = requireSlug(args);
+  const sp = new URLSearchParams({ journey: slug });
+  if (args.n !== undefined) sp.set('n', String(args.n));
+  if (args.status !== undefined) sp.set('status', String(args.status));
+  await assertKnownJourney(slug);
+  return jsonResult(await getJson(`${BASE_URL}/api/shortlist?${sp.toString()}`));
+}
+
+async function handlePriceHistory(params) {
+  const args = (params && params.arguments) || {};
+  const slug = requireSlug(args);
+  const name = requireNonEmptyString(args, 'name');
+  const sp = new URLSearchParams({ journey: slug, name });
+  if (args.limit !== undefined) sp.set('limit', String(args.limit));
+  await assertKnownJourney(slug);
+  return jsonResult(await getJson(`${BASE_URL}/api/price-history?${sp.toString()}`));
+}
+
+async function handleSetCriteria(params) {
+  const args = (params && params.arguments) || {};
+  const slug = requireSlug(args);
+  const key = requireNonEmptyString(args, 'key');
+  const w = typeof args.weight === 'string' ? Number(args.weight) : args.weight;
+  if (typeof w !== 'number' || !Number.isInteger(w) || w < 1 || w > 5) {
+    throw invalidParams('Parameter "weight" muss eine ganze Zahl 1..5 sein.');
+  }
+  await assertKnownJourney(slug);
+  return jsonResult(await postJson(`${BASE_URL}/api/criteria?journey=${encodeURIComponent(slug)}`, { key, weight: w }));
+}
+
+async function handleDeleteCriteria(params) {
+  const args = (params && params.arguments) || {};
+  const slug = requireSlug(args);
+  const key = requireNonEmptyString(args, 'key');
+  await assertKnownJourney(slug);
+  return jsonResult(await deleteJson(`${BASE_URL}/api/criteria?journey=${encodeURIComponent(slug)}&key=${encodeURIComponent(key)}`));
+}
+
 const TOOL_HANDLERS = {
   'journey.help': () => handleHelp(),
   'journey.list': () => handleList(),
   'journey.create': (params) => handleCreate(params),
   'journey.update_config': (params) => handleUpdateConfig(params),
   'journey.delete': (params) => handleDelete(params),
-  'journey.get': async (params) => {
-    const slug = requireSlug((params && params.arguments) || {});
-    return jsonResult(await readJourney(slug));
-  },
+  'journey.get': (params) => handleGet(params),
+  'journey.compare': (params) => handleCompare(params),
+  'journey.shortlist': (params) => handleShortlist(params),
+  'journey.price_history': (params) => handlePriceHistory(params),
+  'journey.set_criteria': (params) => handleSetCriteria(params),
+  'journey.delete_criteria': (params) => handleDeleteCriteria(params),
   'journey.add_item': (params) => handleAddItem(params),
   'journey.delete_item': (params) => handleDeleteItem(params),
   'journey.update_meta': (params) => handleUpdateMeta(params),

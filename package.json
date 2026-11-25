@@ -1,16 +1,16 @@
 {
-  "name": "bike-buyer-helper",
+  "name": "journey-path",
   "version": "1.0.0",
-  "description": "A helper application for buying a bicycle",
+  "description": "JourneyPath — KI-gestützter Kauf-Begleiter (React + Express + SQLite + MCP)",
   "main": "server.js",
   "scripts": {
     "start": "node src/web/backend/server.js",
-    "dev:server": "node --watch-path=.env --watch src/web/backend/server.js",
+    "dev:server": "PORT=3000 node --watch-path=.env --watch src/web/backend/server.js",
     "dev:client": "npm --prefix frontend run dev",
     "dev": "concurrently -k -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
     "build": "npm --prefix frontend run build",
     "mcp": "node src/mcp/server.js",
-    "test": "node --test test/item-format.test.js test/store.test.js test/server.test.js test/auth.test.js test/light-contrast.test.js test/mcp.test.js test/sse.test.js test/journeys-overview-logged-out.test.js test/login-gate.test.js test/crawl-providers.test.js test/crawl-queue.test.js test/spec-alignment.test.js && node --experimental-strip-types --test test/journey-switch.test.js test/compare-cell-wrap.test.js test/compare-spec-grouping.test.js"
+    "test": "node --test test/item-format.test.js test/store.test.js test/server.test.js test/auth.test.js test/light-contrast.test.js test/mcp.test.js test/sse.test.js test/journeys-overview-logged-out.test.js test/login-gate.test.js test/crawl-providers.test.js test/crawl-queue.test.js test/spec-alignment.test.js test/price-parse.test.js test/compare.test.js test/decision.test.js && node --experimental-strip-types --test test/journey-switch.test.js test/compare-cell-wrap.test.js test/compare-spec-grouping.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",

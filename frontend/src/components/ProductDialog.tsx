@@ -16,7 +16,24 @@ interface ProductDialogProps {
   onSubmit: (item: JourneyItem) => void
 }
 
-const EMPTY_FORM = { name: '', price: '', status: 'Thinking', rating: 0, specsText: '', link: '', notes: '' }
+const EMPTY_FORM = {
+  name: '',
+  price: '',
+  status: 'Thinking',
+  rating: 0,
+  specsText: '',
+  link: '',
+  notes: '',
+  prosText: '',
+  consText: '',
+}
+
+function linesToArray(text: string): string[] {
+  return text
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
 
 export function ProductDialog({ open, onOpenChange, item, onSubmit }: ProductDialogProps) {
   const [form, setForm] = useState(EMPTY_FORM)
@@ -32,6 +49,8 @@ export function ProductDialog({ open, onOpenChange, item, onSubmit }: ProductDia
         specsText: specsStringToLines(item.specs),
         link: item.link || '',
         notes: item.notes || '',
+        prosText: (item.pros || []).join('\n'),
+        consText: (item.cons || []).join('\n'),
       })
     } else {
       setForm(EMPTY_FORM)
@@ -48,6 +67,8 @@ export function ProductDialog({ open, onOpenChange, item, onSubmit }: ProductDia
       specs: serializeSpecsLines(form.specsText),
       link: form.link.trim(),
       notes: form.notes.trim(),
+      pros: linesToArray(form.prosText),
+      cons: linesToArray(form.consText),
     })
   }
 
@@ -126,6 +147,29 @@ export function ProductDialog({ open, onOpenChange, item, onSubmit }: ProductDia
               value={form.specsText}
               onChange={(e) => setForm((f) => ({ ...f, specsText: e.target.value }))}
             />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="p-pros">Pro (eine Zeile pro Punkt)</Label>
+              <Textarea
+                id="p-pros"
+                className="h-20 text-sm"
+                placeholder="Günstig&#10;Seitlich offen"
+                value={form.prosText}
+                onChange={(e) => setForm((f) => ({ ...f, prosText: e.target.value }))}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="p-cons">Contra (eine Zeile pro Punkt)</Label>
+              <Textarea
+                id="p-cons"
+                className="h-20 text-sm"
+                placeholder="Nur WLAN&#10;Aufpreis Befüllung"
+                value={form.consText}
+                onChange={(e) => setForm((f) => ({ ...f, consText: e.target.value }))}
+              />
+            </div>
           </div>
 
           <div className="flex flex-col gap-1.5">
